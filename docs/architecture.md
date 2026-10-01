@@ -60,7 +60,7 @@ PostgreSQL 16
 5. ワーカー（`make worker`）が最も古い `queued` を1つ取り出し（`FOR UPDATE SKIP LOCKED`）、`running` にして実行する。実行中は別のセッションで `heartbeat_at` を更新する。`EXECUTION_MODE=sync`（テストと Fake LLM 用）では、応答の前に同じ処理で実行する。
 6. AI に渡す入力を、実行を始めた時点で決める。Evidence は active のものだけ（superseded・retracted・purged は渡さない）。前段の分析は、成功した最新の試行の **primary** のものだけ。渡した ID と状態は `stage_runs.input_snapshot` に残す。
 7. primary を先に、続いて secondary を実行する。`AgentContext`（読み取り専用の入力、LLM、ToolBox、Prompt）を組み立てて AI社員を実行する。
-8. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、relation の規則（重複なし、supports と contradicts の同時指定なし、`evidence_based` は supports か contradicts が必須）を守っているか、Idea 候補を出せるのは idea_generation だけか。
+8. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、relation の規則（relation は必須、重複なし、supports と contradicts の同時指定なし、`evidence_based` は supports か contradicts が必須）を守っているか、Idea 候補を出せるのは idea_generation だけか。構造化出力のスキーマ（下の「実際の LLM」）で形を保証したうえで、スキーマで表せない規則をここで確かめる。
 9. 成功した場合：`analyses`、`claims`、`claim_evidence_links`、（idea_generation の primary なら）`candidate` の Idea を1トランザクションで保存する。secondary の出力からは Idea を作らない。第1回の `analysis_evidence_links` には書き込まない（凍結済み）。
 10. 失敗した場合：部分的な出力をロールバックし、別トランザクションでその execution に `failed` と `error_type` を記録する。
 11. stage_run の状態は primary の結果で決まる（primary が成功なら `succeeded`、それ以外は `failed`）。secondary が失敗しても stage_run は失敗にしない。
@@ -90,6 +90,7 @@ PostgreSQL 16
 
 - プロバイダーは `fake`（Fake LLM。既定・テスト・CI）と `anthropic`（Claude API）の2つ。AI社員の `llm_config.provider` を `anthropic` にした場合だけ Claude API を呼ぶ。モデルの既定は `claude-opus-5-5`（単価 $4 / $20 per 1M tokens を seed で登録）。
 - `llm/claude.py` が公式 SDK（`anthropic`）で Messages API を1回呼ぶ。SDK の型は外に出さない。指示（Prompt ファイル）は `system` に、Evidence など外部由来のデータを含む入力は `user` の JSON に分けて渡す。Tool は ToolBox 経由で、API の tool use は使わない。
+- 出力の形は構造化出力で指定する（PR-10）。AI社員が作る `LLMRequest.response_schema`（出力モデルの JSON Schema）を `anthropic.transform_schema` で API が受け付ける形にし、`output_config.format`（`type: json_schema`）として送る。応答の JSON オブジェクトは `LLMResponse.structured` に入れる。「```json」の囲みを外す処理はせず、JSON オブジェクトでない応答は AI社員の検証で `validation_error` になる。スキーマは実行ごとに作る（`agents/base.py` の `output_schema_for`）：Evidence がある実行では `evidence_id` をその実行で入力した Evidence の ID の enum に限定し、Evidence が0件の実行（アイデア生成は常にこちら）では主張から `evidence_refs` を除き、`kind` を inference / speculation に限定する。スキーマで表せない規則（C-09 の組み合わせ、文字数・件数、入力外の Evidence 参照）は、Pydantic とステージ実行側の検証で引き続き確かめる。
 - SDK の自動再試行はしない（`max_retries=0`）。1回の呼び出し＝1回の記録・計上にして、回数と費用の上限を正しく効かせるため。呼び出しの上限秒数（120秒）は呼び出しごとに渡す。出力の上限は 16,000 トークン（非ストリーミングの範囲）。
 - 費用の上限（10章）：呼び出しの前に、残りの1実行あたりの費用上限で払える出力トークン数まで `max_tokens` を絞り、払えなければ呼ばずに `budget_exceeded` にする。断られた（refusal）・途中で切れた（max_tokens）応答も、使ったトークン分の費用を記録してから `llm_error` にする（E-07）。
 - データ分類（11章）：送信上限は `LLM_MAX_CLASSIFICATION` で、指定がなければ internal（R-03。契約条件を確認するまで変えない）。restricted はどの LLM にも送らない。

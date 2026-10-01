@@ -100,7 +100,17 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 }
 ```
 
-`kind`（`evidence_based` / `inference` / `speculation`）で主張の性質を区別します。AI の出力は次の規則で検証し、違反した場合は実行を `failed`（`validation_error`）にして何も保存しません（第2回仕様 C-09）。
+`kind`（`evidence_based` / `inference` / `speculation`）で主張の性質を区別します。`evidence_based` は「Evidence によって真偽が評価された主張」で、Evidence に否定された主張も含みます。
+
+`relation` は、主張（claim）の内容と Evidence の関係です（Idea の前提との関係ではありません）。
+
+- `supports`：Evidence がその主張の内容を支持する。
+- `contradicts`：Evidence がその主張の内容を否定する。
+- `context`：Evidence は主張の真偽を直接支持・否定せず、前提・背景などの文脈を提供する。
+
+AI の出力は次の規則で検証し、違反した場合は実行を `failed`（`validation_error`）にして何も保存しません（第2回仕様 C-09）。
+
+- relation は必須。省略した出力を supports とみなさない。
 
 - 同じ主張と Evidence に、同じ relation を重複して付けない。
 - 同じ主張と Evidence に、supports と contradicts を同時に付けない。

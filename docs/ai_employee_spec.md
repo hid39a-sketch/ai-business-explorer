@@ -45,7 +45,10 @@ AI社員は DB・Repository・サービスに触れられません。このた�
 
 `AnalysisDraft` に含めるもの：
 - `summary`
-- `claims`（`kind` で根拠あり／推論／推測を区別。`evidence_based` は supports か contradicts の Evidence 参照が必須。同じ Evidence への同じ relation の重複と、supports・contradicts の同時指定は不可。違反すると `validation_error`）
+- `claims`（`kind` で、Evidence によって真偽が評価された主張（`evidence_based`）／推論（`inference`）／推測（`speculation`）を区別する。違反すると `validation_error`）
+  - relation（必須）は、主張（claim）の内容と Evidence の関係を表す。Idea の前提との関係ではない。supports＝Evidence がその主張の内容を支持する、contradicts＝Evidence がその主張の内容を否定する、context＝主張の真偽を直接支持・否定せず、前提・背景などの文脈を提供する。
+  - `evidence_based` は supports か contradicts の Evidence 参照が1つ以上必要（否定された主張も含む）。context だけでは `evidence_based` にならない。
+  - 同じ Evidence への同じ relation の重複と、supports・contradicts の同時指定は不可。relation を省いた出力は supports とみなさず、`validation_error` にする。
 - `data`（構造化出力）
 - `idea_candidates`（idea_generation のみ。AI が書けるのは title / summary / problem だけ）
 - `candidate_notes`（AI生成の補助情報。この実行で Tool が返した候補の `candidate_id` を指す。Evidence 候補・Evidence とは別のテーブルに保存され、Evidence に移ることはない。他の実行の候補を指すと `validation_error`）
@@ -59,7 +62,7 @@ Tool の結果（`ToolResult.evidence_candidates`）は、仕組みが Evidence 
 | key | 担当ステージ | 内容 |
 |---|---|---|
 | `idea_generator` | idea_generation | テーマから Idea 候補を3件生成する（`candidate` で登録） |
-| `market_researcher` | market_research | Evidence ごとに `evidence_based` の主張を作り、根拠のない推論は `inference` として明示する |
+| `market_researcher` | market_research | Evidence によって真偽を評価した主張を `evidence_based` とし、根拠のない推論は `inference` として明示する。Prompt は v2（relation の意味を明記。v1 は変更せず残す） |
 
 ## AI社員の追加手順
 
