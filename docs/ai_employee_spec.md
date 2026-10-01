@@ -7,7 +7,7 @@
 | ID / 名前 / 役割 / 説明 / 目的 | `id` / `name` / `role` / `description` / `purpose` | |
 | 担当ステージ | `stage_key` | `human_review` には割り当てられない |
 | 実装 | `implementation_key` | コード側のレジストリのキー。NULL なら定義のみで、実行できない |
-| 使用モデル | `llm_config` | `{"provider": "fake", "model": "fake-model-v1"}`。第1回で実行できるのは fake のみ |
+| 使用モデル | `llm_config` | `{"provider": "fake", "model": "fake-model-v1"}` または `{"provider": "anthropic"}`（Claude API。model の既定は `claude-opus-5-5`）。1実行あたりの上限 `max_tokens`・`max_llm_calls`・`max_tool_calls`・`max_cost_per_execution` も持てる |
 | 使用ツール | `allowed_tools` | 許可リスト。第1回は本番用ツールがない |
 | 入力形式 / 出力形式 | `input_format` / `output_format` | JSON Schema。実装がある場合は省略すると自動で設定される |
 | Prompt | `prompt_key` / `prompt_version` | `prompts/<key>/<version>.md` |

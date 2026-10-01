@@ -30,13 +30,25 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 | `make test` | pytest（`TEST_DATABASE_URL` の DB を毎回作り直す） |
 | `make check` | 上記すべて + `alembic check` |
 
+## 実際の LLM（Claude API）の接続確認
+
+通常のテストと CI は実際の LLM を呼びません（Fake LLM と、SDK を差し替えた Fake を使う。`APP_ENV=test` では実際のプロバイダーを使わない）。API キーがなくてもすべてのテストが通ります。
+
+接続確認だけは、手動で起動するワークフローで行います。
+
+1. GitHub のリポジトリの Settings → Secrets and variables → Actions で、Repository Secret `ANTHROPIC_API_KEY` を登録する（キーはコード・`.env.example`・Issue などに書かない）。
+2. Actions → 「LLM smoke test (manual)」→ Run workflow で、`confirm` に `run` と入力して起動する。
+3. Claude API が1回だけ呼ばれ、モデル・トークン数・費用（上限 0.05 USD）・リクエストIDが表示される。キーは表示されない。
+
+ローカルで試す場合は `LLM_SMOKE_CONFIRM=yes LLM_API_KEY=... uv run python -m ai_business_explorer.llm_smoke`（`APP_ENV=test` では動かない）。
+
 ## テスト構成
 
 | ディレクトリ | 内容 |
 |---|---|
 | `tests/unit/` | ステージ定義、Fake LLM、Tool のポリシー、Prompt、AI社員、AI社員から DB への到達禁止（import 検査） |
 | `tests/integration/` | DB 制約（人間限定、ai_generated の拒否、ステージ範囲、AI 生成 Idea の出自、ロールは人間のみ、担当の制約、組織の一致） |
-| `tests/api/` | API の一連の流れ（AI社員の CRUD、Idea、実行の成功と失敗、Evidence、Analysis、Review、Decision、再実行、差し戻し、監査ログ）、非同期実行（受付・ワーカー・取り消し・タイムアウト・heartbeat・primary / secondary）、データ分類（引き継ぎ・送信上限・下げる操作）、費用と予算・LLM と Tool のログ（記録・上限・本文の保存・保存期間）、Evidence 候補（収集のみ・承認・却下・一括承認・重複と更新版・AI生成の補助情報の分離・来歴。記録した応答を返す Fake Tool を使う）、Web 取得 Tool（組織での有効化・ドメインの許可リスト・SSRF・上限・秘密情報。名前解決と接続を Fake に差し替え、外部には接続しない）、ロールごとの操作の可否、組織による分離 |
+| `tests/api/` | API の一連の流れ（AI社員の CRUD、Idea、実行の成功と失敗、Evidence、Analysis、Review、Decision、再実行、差し戻し、監査ログ）、非同期実行（受付・ワーカー・取り消し・タイムアウト・heartbeat・primary / secondary）、データ分類（引き継ぎ・送信上限・下げる操作）、費用と予算・LLM と Tool のログ（記録・上限・本文の保存・保存期間）、Evidence 候補（収集のみ・承認・却下・一括承認・重複と更新版・AI生成の補助情報の分離・来歴。記録した応答を返す Fake Tool を使う）、Web 取得 Tool（組織での有効化・ドメインの許可リスト・SSRF・上限・秘密情報。名前解決と接続を Fake に差し替え、外部には接続しない）、Claude API のクライアント（変換・エラー・再試行なし・キーを出さない・分類・予算・費用の記録。SDK を Fake に差し替える）、ロールごとの操作の可否、組織による分離 |
 | `tests/migrations/` | migration による既存データの移行。テストモジュールごとに専用のデータベース（`<TEST_DATABASE_URL のDB名>_<モジュール名>`）を作って使うため、DB ユーザーに CREATE DATABASE の権限が必要 |
 
 LLM は `FakeLLMClient` で、応答は決定的です。失敗のテストでは、`StageRunService(llm_client_factory=...)` に例外を投げる Fake を渡します。

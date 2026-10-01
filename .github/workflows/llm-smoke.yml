@@ -1,0 +1,43 @@
+# Claude API の接続確認（手動でだけ起動する。第2回仕様 D-16・PR-9）。
+# - 通常の CI（ci.yml）は実際の LLM を呼ばない。このワークフローだけが、Repository Secret の
+#   ANTHROPIC_API_KEY を使って Claude API を1回呼ぶ。
+# - 起動には入力 confirm に "run" が必要。費用の上限は1回 0.05 USD（llm_smoke.py で事前と事後に確認）。
+# - 同時に1つしか動かない。5分で打ち切る。API キーはこのステップの環境変数にだけ渡し、表示しない。
+name: LLM smoke test (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "run" to call the real Claude API once (costs up to 0.05 USD)'
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llm-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event.inputs.confirm == 'run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Call Claude API once
+        env:
+          APP_ENV: development
+          LLM_SMOKE_CONFIRM: "yes"
+          LLM_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$LLM_API_KEY" ]; then
+            echo "::error::Repository secret ANTHROPIC_API_KEY is not set"
+            exit 1
+          fi
+          uv run python -m ai_business_explorer.llm_smoke

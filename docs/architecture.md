@@ -86,6 +86,17 @@ PostgreSQL 16
 - 保存期間（R-20）：Tool の生の出力（`tool_call_outputs`）は 90日、候補の全文は 180日で `make retention` が消す。抜粋・ハッシュ・来歴は残す。
 - 組織ごとの自動承認ポリシー、duplicate を pending に戻す操作（E-03）は第2回では作らない。
 
+### 実際の LLM：Anthropic Claude API（第2回仕様 R-03・PR-9）
+
+- プロバイダーは `fake`（Fake LLM。既定・テスト・CI）と `anthropic`（Claude API）の2つ。AI社員の `llm_config.provider` を `anthropic` にした場合だけ Claude API を呼ぶ。モデルの既定は `claude-opus-5-5`（単価 $4 / $20 per 1M tokens を seed で登録）。
+- `llm/claude.py` が公式 SDK（`anthropic`）で Messages API を1回呼ぶ。SDK の型は外に出さない。指示（Prompt ファイル）は `system` に、Evidence など外部由来のデータを含む入力は `user` の JSON に分けて渡す。Tool は ToolBox 経由で、API の tool use は使わない。
+- SDK の自動再試行はしない（`max_retries=0`）。1回の呼び出し＝1回の記録・計上にして、回数と費用の上限を正しく効かせるため。呼び出しの上限秒数（120秒）は呼び出しごとに渡す。出力の上限は 16,000 トークン（非ストリーミングの範囲）。
+- 費用の上限（10章）：呼び出しの前に、残りの1実行あたりの費用上限で払える出力トークン数まで `max_tokens` を絞り、払えなければ呼ばずに `budget_exceeded` にする。断られた（refusal）・途中で切れた（max_tokens）応答も、使ったトークン分の費用を記録してから `llm_error` にする（E-07）。
+- データ分類（11章）：送信上限は `LLM_MAX_CLASSIFICATION` で、指定がなければ internal（R-03。契約条件を確認するまで変えない）。restricted はどの LLM にも送らない。
+- API キー（`LLM_API_KEY`、SecretStr）は SDK のクライアントにだけ渡す。環境の他の認証情報（`ANTHROPIC_API_KEY`・ログイン済みのプロファイル）は使わない。キーは LLM ログ・例外のメッセージ・監査ログに入らない。キーが未設定なら anthropic の AI社員は `llm_error` で失敗し、テスト・CI には影響しない。
+- `APP_ENV=test` では実際のプロバイダーを使わない（テストや CI が実 API を呼ばないための安全装置）。テストは Fake LLM と、SDK を差し替えた Fake で行う。
+- 接続確認は手動のワークフロー `.github/workflows/llm-smoke.yml`（`workflow_dispatch`、入力 `confirm` に `run`）だけで行う。Repository Secret `ANTHROPIC_API_KEY` を使って Claude API を1回だけ呼び、費用の上限は 0.05 USD（呼ぶ前に最悪の場合の費用、呼んだ後に実際の費用を確認）、5分で打ち切り、同時に1つだけ。送るのは固定の短い文で、業務データは送らない。
+
 ### Web 取得 Tool（第2回仕様 13章・R-20）
 
 URL を指定して公開 Web ページを取得する `web_fetch`（external_read）だけを持ちます。検索 API の Tool は第2回では作りません。
@@ -179,7 +190,6 @@ URL を指定して公開 Web ページを取得する `web_fetch`（external_re
 
 第1回では実装していないもの：
 
-- 実際の LLM アダプター（`llm/adapters/`）とトークン使用量の実測
 - `llm_calls` / `tool_calls` の明細テーブル
 - 実ツール（Web Search、Patent Search、News、Financial Data、Internal DB / Knowledge Base）と、ツール経由の Evidence 自動登録
 - 残りの AI社員（CompetitorResearcher、TechnologyResearcher、PatentResearcher、MonetizationAnalyst、RiskAnalyst、BusinessAnalyst）

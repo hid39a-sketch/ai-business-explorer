@@ -68,7 +68,13 @@ from ai_business_explorer.infrastructure.db.repositories import (
     LLMCallRepository,
     ToolCallRepository,
 )
-from ai_business_explorer.llm.base import LLMClient, LLMError, LLMRequest, LLMResponse
+from ai_business_explorer.llm.base import (
+    LLMClient,
+    LLMError,
+    LLMRequest,
+    LLMResponse,
+    LLMResponseError,
+)
 from ai_business_explorer.tools.base import Tool, ToolError, ToolResult
 
 MONEY_QUANTUM = Decimal("0.00000001")
@@ -472,20 +478,40 @@ class ExecutionMeter:
     def wrap(self, inner: LLMClient) -> LLMClient:
         return _MeteredLLMClient(self, inner)
 
-    def before_llm_call(self, request: LLMRequest) -> LLMRequest:
+    def before_llm_call(self, request: LLMRequest, provider: str) -> LLMRequest:
         if self.llm_call_count >= self.limits.max_llm_calls:
             raise BudgetExceededError(
                 f"LLM call limit {self.limits.max_llm_calls} per execution reached"
             )
         self._check_cost()
+        caps = [c for c in (request.max_tokens, self.limits.max_tokens) if c is not None]
+        affordable = self._affordable_output_tokens(request, provider)
+        if affordable is not None:
+            if affordable < 1:
+                raise BudgetExceededError(
+                    "the remaining execution budget cannot cover another LLM call"
+                )
+            caps.append(affordable)
         self.llm_call_count += 1
-        if self.limits.max_tokens is not None:
-            current = request.max_tokens
-            capped = (
-                self.limits.max_tokens if current is None else min(current, self.limits.max_tokens)
-            )
-            request = request.model_copy(update={"max_tokens": capped})
+        if caps:
+            request = request.model_copy(update={"max_tokens": min(caps)})
         return request
+
+    def _affordable_output_tokens(self, request: LLMRequest, provider: str) -> int | None:
+        """残りの費用上限で払える出力トークン数（単価が 0 なら制限しない）。
+
+        1回の呼び出しで上限を超えないよう、出力の最大数を絞る。入力は文字数をトークン数の上限の
+        目安として見積もる（少なく見積もらない側に倒す）。
+        """
+        pricing = find_pricing(self.session, PricingKind.LLM, provider, request.model, utcnow())
+        if pricing is None or pricing.output_per_million_tokens <= 0:
+            return None
+        chars = len(request.system) + sum(len(m.content) for m in request.messages)
+        input_cost = (
+            Decimal(chars) * pricing.input_per_million_tokens / TOKENS_PER_UNIT + pricing.per_call
+        )
+        remaining = self.cost_limit - self.execution.cost_amount - input_cost
+        return int(remaining * TOKENS_PER_UNIT / pricing.output_per_million_tokens)
 
     def record_llm_call(
         self,
@@ -642,13 +668,15 @@ class _MeteredLLMClient:
         return self._inner.provider
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        request = self._meter.before_llm_call(request)
+        request = self._meter.before_llm_call(request, self.provider)
         started = time.monotonic()
         try:
             response = self._inner.complete(request)
         except Exception as exc:
             elapsed = int((time.monotonic() - started) * 1000)
-            self._meter.record_llm_call(self.provider, request, None, exc, elapsed)
+            # 応答が返っていれば（断られた・途中で切れた）その使用量で費用を記録する（E-07）
+            returned = exc.response if isinstance(exc, LLMResponseError) else None
+            self._meter.record_llm_call(self.provider, request, returned, exc, elapsed)
             raise
         elapsed = int((time.monotonic() - started) * 1000)
         self._meter.record_llm_call(self.provider, request, response, None, elapsed)

@@ -198,13 +198,15 @@ class StageRunService:
         settings: Settings,
         agent_registry: AgentRegistry,
         tool_registry: ToolRegistry,
-        llm_client_factory: LLMClientFactory = build_llm_client,
+        llm_client_factory: LLMClientFactory | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         self.agent_registry = agent_registry
         self.tool_registry = tool_registry
-        self.llm_client_factory = llm_client_factory
+        self.llm_client_factory: LLMClientFactory = llm_client_factory or (
+            lambda provider: build_llm_client(provider, settings)
+        )
         self.explorations = ExplorationRepository(session)
         self.ideas = IdeaRepository(session)
         self.employees = AIEmployeeRepository(session)
