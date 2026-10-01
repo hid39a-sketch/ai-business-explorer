@@ -1,7 +1,7 @@
 """初期データ投入（冪等）。
 
 既定組織、人間 actor 1人（admin）、system actor 1人（ロールなし）、
-Fake AI社員2体（それぞれのステージの primary）、Fake LLM の単価（0 USD）。
+Fake AI社員2体（それぞれのステージの primary）、LLM の単価（Fake 0 USD、Claude Opus 5.5）。
 
 実行: uv run python -m ai_business_explorer.seed
 """
@@ -37,6 +37,7 @@ from ai_business_explorer.infrastructure.db.repositories import (
     StageAssignmentRepository,
 )
 from ai_business_explorer.infrastructure.db.session import build_engine, build_session_factory
+from ai_business_explorer.llm.claude import CLAUDE_DEFAULT_MODEL, CLAUDE_PROVIDER
 from ai_business_explorer.llm.fake import FAKE_MODEL, FAKE_PROVIDER
 
 # Swagger から操作しやすいよう固定 ID を使う。
@@ -46,7 +47,8 @@ DEFAULT_ORGANIZATION_NAME = "Default Organization"
 DEFAULT_HUMAN_ACTOR_ID = UUID("00000000-0000-7000-8000-000000000001")
 SYSTEM_ACTOR_ID = UUID("00000000-0000-7000-8000-000000000002")
 
-# Fake LLM は費用が発生しない。単価の行があることで、予算の確認と費用の記録が同じ経路を通る
+# 単価の適用開始日時。Fake LLM は費用が発生しないが、単価の行があることで予算の確認と費用の記録が
+# 実際の LLM と同じ経路を通る
 FAKE_PRICING_EFFECTIVE_FROM = datetime(2026, 1, 1, tzinfo=UTC)
 
 SEED_EMPLOYEES = [
@@ -122,27 +124,36 @@ def seed(session: Session) -> None:
     session.commit()
 
 
+# LLM の単価（USD / 100万トークン）。単価が変わったら新しい行（適用開始日時）を足す
+SEED_LLM_PRICING = [
+    (FAKE_PROVIDER, FAKE_MODEL, Decimal(0), Decimal(0)),
+    # Anthropic の公開価格（2026-09 時点）。thinking のトークンは出力として課金される
+    (CLAUDE_PROVIDER, CLAUDE_DEFAULT_MODEL, Decimal(4), Decimal(20)),
+]
+
+
 def _seed_pricing(session: Session) -> None:
-    exists = session.scalars(
-        select(Pricing).where(
-            Pricing.kind == PricingKind.LLM.value,
-            Pricing.provider == FAKE_PROVIDER,
-            Pricing.model == FAKE_MODEL,
-        )
-    ).first()
-    if exists is None:
-        session.add(
-            Pricing(
-                kind=PricingKind.LLM.value,
-                provider=FAKE_PROVIDER,
-                model=FAKE_MODEL,
-                input_per_million_tokens=Decimal(0),
-                output_per_million_tokens=Decimal(0),
-                per_call=Decimal(0),
-                currency="USD",
-                effective_from=FAKE_PRICING_EFFECTIVE_FROM,
+    for provider, model, input_price, output_price in SEED_LLM_PRICING:
+        exists = session.scalars(
+            select(Pricing).where(
+                Pricing.kind == PricingKind.LLM.value,
+                Pricing.provider == provider,
+                Pricing.model == model,
             )
-        )
+        ).first()
+        if exists is None:
+            session.add(
+                Pricing(
+                    kind=PricingKind.LLM.value,
+                    provider=provider,
+                    model=model,
+                    input_per_million_tokens=input_price,
+                    output_per_million_tokens=output_price,
+                    per_call=Decimal(0),
+                    currency="USD",
+                    effective_from=FAKE_PRICING_EFFECTIVE_FROM,
+                )
+            )
 
 
 def _create_employee(session: Session, registry: AgentRegistry, spec: dict[str, str]) -> AIEmployee:

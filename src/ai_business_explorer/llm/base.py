@@ -61,6 +61,14 @@ class LLMResponse(BaseModel):
     request_id: str | None = None
 
 
+class LLMResponseError(LLMError):
+    """応答は返ったが使えない（断られた・途中で切れた）。費用の記録のために応答を持つ。"""
+
+    def __init__(self, message: str, response: LLMResponse) -> None:
+        super().__init__(message)
+        self.response = response
+
+
 class LLMClient(Protocol):
     @property
     def provider(self) -> str: ...

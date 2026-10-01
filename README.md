@@ -23,7 +23,7 @@ Evidence（根拠） → AI Analysis（AI の分析） → Human Review（人間
 | 設定 | pydantic-settings（`.env`） |
 | 品質 | pytest、Ruff、mypy（strict）、GitHub Actions |
 | 開発環境 | uv、Docker Compose |
-| LLM | **FakeLLMClient のみ**（実際の LLM API には接続しない） |
+| LLM | FakeLLMClient（既定・テスト・CI）と Anthropic Claude API（`claude-opus-5-5`。AI社員の `llm_config.provider` を `anthropic` にしたときだけ） |
 
 ## クイックスタート
 
@@ -64,9 +64,9 @@ Web から情報を集める Tool は、URL を指定して公開ページを取
 
 > ⚠️ `X-Actor-Id` は認証ではありません。ヘッダの値をそのまま信頼する簡易方式で、第2回も同じです。ヘッダを偽ればどのロールでも操作できるため、ロールは誤操作の防止にしかならず、不正は防げません。外部に公開する環境では使えません。
 
-## 第1回で実装していないもの
+## 第2回で実装していないもの
 
-実際の LLM API 接続、Web 検索、外部 API、特許 DB、自律型エージェント、ステージの自動連鎖、評価スコア・ランキング、AI による意思決定、本格的な認証・権限管理、Web UI、課金、本番デプロイ。
+検索 API、特許 DB などの外部 API、自律型エージェント、ステージの自動連鎖、評価スコア・ランキング、AI による意思決定、本格的な認証・権限管理、Web UI、課金、本番デプロイ。実際の LLM（Claude API）は第2回で接続しました（接続確認は手動のワークフローだけ。[Development Guide](docs/development_guide.md)）。
 
 詳細は [docs/architecture.md](docs/architecture.md) の「Future Extension」を参照してください。
 

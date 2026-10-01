@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from ai_business_explorer.config import Settings
 from ai_business_explorer.llm.base import (
     LLMError,
     LLMMessage,
@@ -54,10 +55,14 @@ def test_tracking_client_accumulates_usage() -> None:
     assert tracker.last_model == "fake-model-v1"
 
 
-def test_only_fake_provider_is_available() -> None:
-    assert build_llm_client("fake").provider == "fake"
+def test_supported_providers() -> None:
+    """fake と anthropic（Claude API）だけ。テスト環境では実際のプロバイダーを使わない。"""
+    settings = Settings(app_env="test")
+    assert build_llm_client("fake", settings).provider == "fake"
     with pytest.raises(LLMProviderNotAvailableError):
-        build_llm_client("openai")
+        build_llm_client("openai", settings)
+    with pytest.raises(LLMProviderNotAvailableError, match="APP_ENV=test"):
+        build_llm_client("anthropic", settings)
 
 
 def test_resolve_llm_config_defaults() -> None:

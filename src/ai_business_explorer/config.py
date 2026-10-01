@@ -17,9 +17,10 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test"] = "development"
     database_url: str = "postgresql+psycopg://abe:abe@localhost:5432/ai_business_explorer"
 
-    # 第1回は Fake 以外の LLM プロバイダーを受け付けない（起動時に検証される）。
-    llm_provider: Literal["fake"] = "fake"
-    # 将来の LLM 接続用。第1回では使用しない。
+    # llm_config.provider を指定しないときのプロバイダー。fake（既定）/ anthropic（Claude API）
+    llm_provider: Literal["fake", "anthropic"] = "fake"
+    # Claude API の API キー（第2回仕様 R-03）。環境変数・シークレットからだけ渡す。ログに残さない。
+    # 未設定なら anthropic の AI社員は実行できない（llm_error）。APP_ENV=test では使わない
     llm_api_key: SecretStr | None = None
 
     # AI社員が使えるツールの副作用区分（第2回仕様 13章）。外部への読み取り（external_read）まで。
