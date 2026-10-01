@@ -435,6 +435,7 @@ class ExecutionMeter:
         self.budgets = BudgetService(session, settings)
         self.llm_call_count = 0
         self.tool_call_count = 0
+        self.tool_call_counts: dict[str, int] = {}
         # confidential 以上の本文は保存しない。設定で全体を none にもできる（R-16）
         sensitive = classification.rank >= DataClassification.CONFIDENTIAL.rank
         self.payload_mode = (
@@ -569,8 +570,16 @@ class ExecutionMeter:
             raise BudgetExceededError(
                 f"tool call limit {self.limits.max_tool_calls} per execution reached"
             )
+        used = self.tool_call_counts.get(tool.name, 0)
+        if tool.max_calls_per_execution is not None and used >= tool.max_calls_per_execution:
+            # Tool ごとの上限（Web 取得は1実行 20件。R-20）
+            raise ToolError(
+                f"tool '{tool.name}' call limit {tool.max_calls_per_execution} "
+                "per execution reached"
+            )
         self._check_cost()
         self.tool_call_count += 1
+        self.tool_call_counts[tool.name] = used + 1
 
     def after_tool_call(
         self,

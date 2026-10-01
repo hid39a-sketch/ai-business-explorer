@@ -1,0 +1,11 @@
+{
+  "organizations": {
+    "00000000-0000-7000-8000-000000000100": {
+      "enabled_tools": ["web_fetch"],
+      "web_fetch": {
+        "allowed_domains": ["example.com"],
+        "blocked_domains": []
+      }
+    }
+  }
+}

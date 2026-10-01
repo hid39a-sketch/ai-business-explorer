@@ -16,7 +16,7 @@ from ai_business_explorer.domain.errors import (
     PermissionDeniedError,
 )
 from ai_business_explorer.infrastructure.db.session import build_engine, build_session_factory
-from ai_business_explorer.tools.base import default_tool_registry
+from ai_business_explorer.tools.defaults import build_tool_registry
 
 _STATUS_BY_ERROR: dict[type[DomainError], int] = {
     NotFoundError: status.HTTP_404_NOT_FOUND,
@@ -50,7 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = build_session_factory(engine)
     app.state.agent_registry = build_default_registry()
-    app.state.tool_registry = default_tool_registry
+    app.state.tool_registry = build_tool_registry(settings.web_fetch_user_agent)
     app.add_exception_handler(DomainError, _domain_error_handler)
     app.include_router(api_router)
     return app
