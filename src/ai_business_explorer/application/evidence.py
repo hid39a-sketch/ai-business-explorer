@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ai_business_explorer.application.commands import (
@@ -27,7 +28,7 @@ from ai_business_explorer.domain.evidence import (
     EvidenceStatus,
     normalize_url,
 )
-from ai_business_explorer.infrastructure.db.models import Actor, Evidence
+from ai_business_explorer.infrastructure.db.models import Actor, Evidence, ToolCall
 from ai_business_explorer.infrastructure.db.repositories import (
     EvidenceRepository,
     ExplorationRepository,
@@ -118,6 +119,14 @@ class EvidenceService:
             )
             for e in evidence
         }
+
+    def tool_calls_for(self, evidence: Sequence[Evidence]) -> dict[UUID, ToolCall]:
+        """来歴（provenance）を組み立てるための Tool 呼び出し（Tool 取得の Evidence だけ）。"""
+        ids = {e.tool_call_id for e in evidence if e.tool_call_id is not None}
+        if not ids:
+            return {}
+        calls = self.session.scalars(select(ToolCall).where(ToolCall.id.in_(ids))).all()
+        return {c.id: c for c in calls}
 
     def list_for_exploration(
         self,

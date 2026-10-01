@@ -39,11 +39,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ai_business_explorer.domain.enums import (
+    AcquisitionMethod,
     ActorType,
     AdoptionStatus,
     AIEmployeeStatus,
     BudgetMode,
     CallStatus,
+    CandidateStatus,
     ClaimKind,
     DataClassification,
     ErrorType,
@@ -59,6 +61,7 @@ from ai_business_explorer.domain.enums import (
     ReviewStatus,
     RunStatus,
     StageAssignmentRole,
+    StageRunMode,
     StageRunTrigger,
     sql_in,
 )
@@ -287,6 +290,12 @@ class StageRun(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
             name="fk_stage_runs_exploration_org",
         ),
         CheckConstraint(f"trigger IN ({sql_in(StageRunTrigger)})", name="trigger"),
+        CheckConstraint(f"mode IN ({sql_in(StageRunMode)})", name="mode"),
+        # collect_only は再実行・差し戻しの対象にならない（毎回新しく集める）
+        CheckConstraint(
+            f"mode = '{StageRunMode.ANALYZE.value}' OR trigger = '{StageRunTrigger.INITIAL.value}'",
+            name="collect_only_is_initial",
+        ),
         CheckConstraint(f"status IN ({sql_in(RunStatus)})", name="status"),
         CheckConstraint(
             f"(stage_key = '{IDEA_GENERATION}') = (idea_id IS NULL)", name="scope_matches_stage"
@@ -320,14 +329,20 @@ class StageRun(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
             "exploration_id",
             "stage_key",
             unique=True,
-            postgresql_where=text("idea_id IS NULL AND superseded_at IS NULL"),
+            postgresql_where=text(
+                "idea_id IS NULL AND superseded_at IS NULL "
+                f"AND mode = '{StageRunMode.ANALYZE.value}'"
+            ),
         ),
         Index(
             "uq_stage_runs_idea_current",
             "idea_id",
             "stage_key",
             unique=True,
-            postgresql_where=text("idea_id IS NOT NULL AND superseded_at IS NULL"),
+            postgresql_where=text(
+                "idea_id IS NOT NULL AND superseded_at IS NULL "
+                f"AND mode = '{StageRunMode.ANALYZE.value}'"
+            ),
         ),
     )
 
@@ -336,6 +351,8 @@ class StageRun(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     stage_key: Mapped[str] = mapped_column(String(64))
     attempt_no: Mapped[int] = mapped_column(Integer)
     trigger: Mapped[str] = mapped_column(String(16))
+    # analyze（分析を作る）/ collect_only（候補を集めるだけ）。第2回仕様 2章・E-02
+    mode: Mapped[str] = mapped_column(String(16), default=StageRunMode.ANALYZE.value)
     rerun_of_id: Mapped[UUID | None] = mapped_column(ForeignKey("stage_runs.id"))
     sent_back_from_id: Mapped[UUID | None] = mapped_column(ForeignKey("stage_runs.id"))
     reason: Mapped[str | None] = mapped_column(Text)
@@ -535,6 +552,37 @@ class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
             "(retracted_at IS NULL) = (retraction_reason IS NULL)", name="retraction_reason"
         ),
         CheckConstraint(f"classification IN ({sql_in(DataClassification)})", name="classification"),
+        # 来歴（第2回仕様 3章）。Tool 取得なら候補・Tool 呼び出し・実行・取得日時が必須
+        CheckConstraint(
+            f"acquisition_method IN ({sql_in(AcquisitionMethod)})", name="acquisition_method"
+        ),
+        CheckConstraint(
+            f"(acquisition_method = '{AcquisitionMethod.TOOL.value}') = "
+            "(candidate_id IS NOT NULL AND tool_call_id IS NOT NULL "
+            "AND execution_id IS NOT NULL AND retrieved_at IS NOT NULL)",
+            name="tool_provenance",
+        ),
+        CheckConstraint(
+            f"acquisition_method = '{AcquisitionMethod.TOOL.value}' OR "
+            "(candidate_id IS NULL AND tool_call_id IS NULL AND execution_id IS NULL)",
+            name="human_input_has_no_tool_provenance",
+        ),
+        UniqueConstraint("candidate_id", name="uq_evidence_candidate_id"),
+        ForeignKeyConstraint(
+            ["candidate_id", "organization_id"],
+            ["evidence_candidates.id", "evidence_candidates.organization_id"],
+            name="fk_evidence_candidate_org",
+        ),
+        ForeignKeyConstraint(
+            ["tool_call_id", "organization_id"],
+            ["tool_calls.id", "tool_calls.organization_id"],
+            name="fk_evidence_tool_call_org",
+        ),
+        ForeignKeyConstraint(
+            ["execution_id", "organization_id"],
+            ["executions.id", "executions.organization_id"],
+            name="fk_evidence_execution_org",
+        ),
     )
 
     exploration_id: Mapped[UUID] = mapped_column(ForeignKey("explorations.id"), index=True)
@@ -564,6 +612,13 @@ class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
     classification: Mapped[str] = mapped_column(
         String(16), default=DataClassification.INTERNAL.value
     )
+    # 来歴（第2回仕様 3章）。Tool 取得の Evidence は、承認した候補・Tool 呼び出し・候補を作った実行
+    acquisition_method: Mapped[str] = mapped_column(
+        String(16), default=AcquisitionMethod.HUMAN_INPUT.value
+    )
+    candidate_id: Mapped[UUID | None] = mapped_column()
+    tool_call_id: Mapped[UUID | None] = mapped_column()
+    execution_id: Mapped[UUID | None] = mapped_column()
 
 
 class AnalysisEvidenceLink(Base):
@@ -864,6 +919,7 @@ class ToolCall(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
             name="fk_tool_calls_execution_org",
         ),
         Index("ix_tool_calls_list", "organization_id", "created_at", "id"),
+        UniqueConstraint("id", "organization_id", name="uq_tool_calls_id_organization_id"),
         CheckConstraint(f"status IN ({sql_in(CallStatus)})", name="status"),
         CheckConstraint(
             f"error_type IS NULL OR error_type IN ({sql_in(ErrorType)})", name="error_type"
@@ -886,3 +942,148 @@ class ToolCall(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
     status: Mapped[str] = mapped_column(String(16))
     error_type: Mapped[str | None] = mapped_column(String(32))
     error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class ToolCallOutput(OrganizationScopedMixin, CreatedAtMixin, Base):
+    """Tool の生の出力（本文）。保存期間（90日）で消す。メタデータは tool_calls に残る。"""
+
+    __tablename__ = "tool_call_outputs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tool_call_id", "organization_id"],
+            ["tool_calls.id", "tool_calls.organization_id"],
+            name="fk_tool_call_outputs_call_org",
+        ),
+    )
+
+    tool_call_id: Mapped[UUID] = mapped_column(primary_key=True)
+    output: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+# ------------------------------------------------------------ Evidence 候補（第2回 2章・B-21）
+
+
+class EvidenceCandidate(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
+    """Tool が取得した Evidence 候補。原情報（Tool が外部から取得したもの）だけを持つ。
+
+    AI が生成した文章は持たない（evidence_candidate_ai_notes に分ける。B-21）。人間（member 以上）が
+    承認すると Evidence になり、却下・重複は Evidence にならない。
+    """
+
+    __tablename__ = "evidence_candidates"
+    __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_evidence_candidates_id_organization_id"),
+        Index(
+            "ix_evidence_candidates_list",
+            "organization_id",
+            "exploration_id",
+            "created_at",
+            "id",
+        ),
+        ForeignKeyConstraint(
+            ["exploration_id", "organization_id"],
+            ["explorations.id", "explorations.organization_id"],
+            name="fk_evidence_candidates_exploration_org",
+        ),
+        ForeignKeyConstraint(
+            ["idea_id", "organization_id"],
+            ["ideas.id", "ideas.organization_id"],
+            name="fk_evidence_candidates_idea_org",
+        ),
+        ForeignKeyConstraint(
+            ["execution_id", "organization_id"],
+            ["executions.id", "executions.organization_id"],
+            name="fk_evidence_candidates_execution_org",
+        ),
+        ForeignKeyConstraint(
+            ["tool_call_id", "organization_id"],
+            ["tool_calls.id", "tool_calls.organization_id"],
+            name="fk_evidence_candidates_tool_call_org",
+        ),
+        ForeignKeyConstraint(
+            ["decided_by_actor_id", "decided_by_actor_type"],
+            ["actors.id", "actors.actor_type"],
+            name="fk_evidence_candidates_decided_by_human",
+        ),
+        CheckConstraint(f"status IN ({sql_in(CandidateStatus)})", name="status"),
+        CheckConstraint(f"source_type IN ({sql_in(EvidenceSourceType)})", name="source_type"),
+        CheckConstraint(
+            f"decided_by_actor_type IS NULL OR decided_by_actor_type = '{HUMAN}'",
+            name="decided_by_human",
+        ),
+        # 承認・却下は人間の判断の記録が必須。pending と duplicate（自動判定）は判断の記録を持たない
+        CheckConstraint(
+            "(status IN ('accepted', 'rejected')) = (decided_by_actor_id IS NOT NULL) "
+            "AND (decided_by_actor_id IS NULL) = (decided_at IS NULL) "
+            "AND (decided_by_actor_id IS NULL) = (decided_by_actor_type IS NULL)",
+            name="decision_record",
+        ),
+        CheckConstraint(
+            "status <> 'rejected' OR decision_reason IS NOT NULL", name="reject_reason"
+        ),
+        CheckConstraint(
+            "(status = 'duplicate') = (duplicate_of_evidence_id IS NOT NULL)", name="duplicate_of"
+        ),
+        CheckConstraint("char_length(quote) <= 2000", name="quote_excerpt_length"),
+    )
+
+    exploration_id: Mapped[UUID] = mapped_column(index=True)
+    idea_id: Mapped[UUID | None] = mapped_column()
+    execution_id: Mapped[UUID] = mapped_column(index=True)
+    tool_call_id: Mapped[UUID] = mapped_column()
+    # 原情報（Tool が外部から取得したもの）
+    source_type: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(String(500))
+    url: Mapped[str | None] = mapped_column(String(2000))
+    source_key: Mapped[str | None] = mapped_column(String(2000))
+    # 抜粋（最大 2,000字。永続）と、取得した全文（180日で消す）とそのハッシュ（永続）
+    quote: Mapped[str | None] = mapped_column(Text)
+    snapshot: Mapped[str | None] = mapped_column(Text)
+    snapshot_hash: Mapped[str | None] = mapped_column(String(64))
+    snapshot_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict)
+    # 状態と判断の記録
+    status: Mapped[str] = mapped_column(String(16), default=CandidateStatus.PENDING.value)
+    duplicate_of_evidence_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evidence.id", use_alter=True)  # evidence ↔ 候補の循環参照
+    )
+    # 同じ出典（source_key）で内容が違う active な Evidence。承認するとその更新版になる
+    updates_evidence_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("evidence.id", use_alter=True)  # evidence ↔ 候補の循環参照
+    )
+    decided_by_actor_id: Mapped[UUID | None] = mapped_column()
+    decided_by_actor_type: Mapped[str | None] = mapped_column(String(16))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class EvidenceCandidateAINote(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
+    """AI生成の補助情報（第2回仕様 2章・B-21）。Evidence でも候補の原情報でもない。
+
+    元の候補と、生成した実行を必ず参照する。内容が Evidence に移る経路はない。不変。
+    来歴（実行・LLM のモデル・Prompt の版）はこちらに記録し、Evidence の来歴には含めない。
+    """
+
+    __tablename__ = "evidence_candidate_ai_notes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "organization_id"],
+            ["evidence_candidates.id", "evidence_candidates.organization_id"],
+            name="fk_candidate_ai_notes_candidate_org",
+        ),
+        ForeignKeyConstraint(
+            ["execution_id", "organization_id"],
+            ["executions.id", "executions.organization_id"],
+            name="fk_candidate_ai_notes_execution_org",
+        ),
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(index=True)
+    execution_id: Mapped[UUID] = mapped_column(index=True)
+    note: Mapped[str] = mapped_column(Text)
+    llm_provider: Mapped[str | None] = mapped_column(String(64))
+    llm_model: Mapped[str | None] = mapped_column(String(128))
+    prompt_key: Mapped[str | None] = mapped_column(String(64))
+    prompt_version: Mapped[str | None] = mapped_column(String(16))

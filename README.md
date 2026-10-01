@@ -56,6 +56,8 @@ Docker を使わない場合は、PostgreSQL 16 を用意して `DATABASE_URL` �
 
 LLM・Tool の呼び出しは費用とともに記録され、組織の月額予算（既定 100 USD）と1実行あたりの上限（既定 1 USD、LLM・Tool 各20回）を超える実行は止まります。`GET /api/v1/costs` で当月の費用と予算の残りを確認でき、予算は admin が `PUT /api/v1/budgets` で設定します。LLM ログの本文は admin だけが閲覧でき、90日で消します（`make retention`）。
 
+Tool が取得した情報は Evidence 候補になり、人間（member 以上）が承認したものだけが Evidence になります。`POST .../stage-runs` に `"mode": "collect_only"` を指定すると候補を集めるだけの実行になり（分析は作らない）、`GET /api/v1/explorations/{id}/evidence-candidates` で確認して `POST /api/v1/evidence-candidates/{id}/accept`（または `/reject`、`/bulk-accept`）で判断します。AI が書いた要約は「AI生成の補助情報」として候補とは別に保存され（`/ai-notes`、読み取りのみ）、Evidence には入りません。
+
 一覧 API は `{"items": [...], "next_cursor": ..., "has_more": ...}` を返します（`limit` は既定 50・最大 200、続きは `cursor` に前の応答の `next_cursor` を渡す）。Evidence の一覧は既定で active（有効）なものだけを返し、`status`（`active` / `superseded` / `retracted` / `purged`、繰り返し指定可）で状態を指定できます。日時はすべて UTC（末尾 `Z`）です。
 
 > ⚠️ `X-Actor-Id` は認証ではありません。ヘッダの値をそのまま信頼する簡易方式で、第2回も同じです。ヘッダを偽ればどのロールでも操作できるため、ロールは誤操作の防止にしかならず、不正は防げません。外部に公開する環境では使えません。

@@ -13,6 +13,7 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, Select, and_, exists, false, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from ai_business_explorer.domain.enums import StageRunMode
 from ai_business_explorer.domain.errors import NotFoundError
 from ai_business_explorer.domain.evidence import EvidenceStatus
 from ai_business_explorer.infrastructure.db.base import Base
@@ -25,6 +26,8 @@ from ai_business_explorer.infrastructure.db.models import (
     Claim,
     ClaimEvidenceLink,
     Evidence,
+    EvidenceCandidate,
+    EvidenceCandidateAINote,
     Execution,
     Exploration,
     HumanDecision,
@@ -145,17 +148,20 @@ class StageRunRepository(Repository[StageRun]):
     def current(
         self, exploration_id: UUID, idea_id: UUID | None, stage_key: str
     ) -> StageRun | None:
-        """スコープ・ステージの最新（未 supersede）試行。"""
+        """スコープ・ステージの最新（未 supersede）試行。collect_only は数えない（E-02）。"""
         stmt = select(StageRun).where(
             *self._scope(exploration_id, idea_id),
             StageRun.stage_key == stage_key,
             StageRun.superseded_at.is_(None),
+            StageRun.mode == StageRunMode.ANALYZE.value,
         )
         return self.session.scalars(stmt).one_or_none()
 
     def current_all(self, exploration_id: UUID, idea_id: UUID | None) -> Sequence[StageRun]:
         stmt = select(StageRun).where(
-            *self._scope(exploration_id, idea_id), StageRun.superseded_at.is_(None)
+            *self._scope(exploration_id, idea_id),
+            StageRun.superseded_at.is_(None),
+            StageRun.mode == StageRunMode.ANALYZE.value,
         )
         return self.session.scalars(stmt).all()
 
@@ -169,7 +175,10 @@ class StageRunRepository(Repository[StageRun]):
     def latest(self, exploration_id: UUID, idea_id: UUID | None) -> StageRun | None:
         stmt = (
             select(StageRun)
-            .where(*self._scope(exploration_id, idea_id))
+            .where(
+                *self._scope(exploration_id, idea_id),
+                StageRun.mode == StageRunMode.ANALYZE.value,
+            )
             .order_by(StageRun.started_at.desc())
             .limit(1)
         )
@@ -302,3 +311,11 @@ class LLMCallRepository(Repository[LLMCall]):
 
 class ToolCallRepository(Repository[ToolCall]):
     model = ToolCall
+
+
+class EvidenceCandidateRepository(Repository[EvidenceCandidate]):
+    model = EvidenceCandidate
+
+
+class EvidenceCandidateAINoteRepository(Repository[EvidenceCandidateAINote]):
+    model = EvidenceCandidateAINote

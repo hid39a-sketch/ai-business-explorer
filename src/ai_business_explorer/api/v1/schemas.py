@@ -110,6 +110,21 @@ class IdeaOut(_Out):
     research_status: ResearchStatusOut | None = None
 
 
+class ProvenanceOut(BaseModel):
+    """Evidence の来歴（取得方法・Tool・検索語・登録した人間）。補助情報の来歴は含めない。"""
+
+    acquisition_method: str
+    # 人間の入力なら登録した人、Tool 取得なら承認した人
+    registered_by_actor_id: UUID
+    candidate_id: UUID | None = None
+    execution_id: UUID | None = None
+    tool_call_id: UUID | None = None
+    tool_name: str | None = None
+    tool_version: str | None = None
+    tool_input: dict[str, Any] | None = None
+    retrieved_at: UTCDateTime | None = None
+
+
 class EvidenceOut(_Out):
     id: UUID
     organization_id: UUID
@@ -134,7 +149,13 @@ class EvidenceOut(_Out):
     purge_reason: str | None
     purged_by_actor_id: UUID | None
     classification: str
+    # 来歴（第2回仕様 3章）。human_input / tool
+    acquisition_method: str
+    candidate_id: UUID | None
+    tool_call_id: UUID | None
+    execution_id: UUID | None
     created_at: UTCDateTime
+    provenance: "ProvenanceOut | None" = None
     # 状態（取得時に算出。優先順位 purged > retracted > superseded > active）と、元の各状態
     evidence_status: str = "active"
     is_retracted: bool = False
@@ -213,6 +234,8 @@ class StageRunOut(_Out):
     status: str
     input_snapshot: dict[str, Any]
     superseded_at: UTCDateTime | None
+    # analyze / collect_only（第2回仕様 2章）
+    mode: str
     # 受け付けた時刻（並び順に使う）。ワーカーが取り出した時刻は claimed_at
     started_at: UTCDateTime
     claimed_at: UTCDateTime | None
@@ -411,3 +434,58 @@ class CostSummaryOut(BaseModel):
     totals: list[CostLineOut]
     by_exploration: list[CostLineOut]
     budgets: list[BudgetStatusOut]
+
+
+class EvidenceCandidateOut(_Out):
+    """Evidence 候補。Tool が外部から取得した原情報だけ（AI生成の文章は含まない。B-21）。"""
+
+    id: UUID
+    organization_id: UUID
+    exploration_id: UUID
+    idea_id: UUID | None
+    execution_id: UUID
+    tool_call_id: UUID
+    source_type: str
+    title: str
+    url: str | None
+    source_key: str | None
+    quote: str | None
+    snapshot: str | None
+    snapshot_hash: str | None
+    snapshot_deleted_at: UTCDateTime | None
+    published_at: UTCDateTime | None
+    retrieved_at: UTCDateTime
+    metadata: dict[str, Any] = Field(validation_alias="metadata_")
+    status: str
+    duplicate_of_evidence_id: UUID | None
+    updates_evidence_id: UUID | None
+    decided_by_actor_id: UUID | None
+    decided_at: UTCDateTime | None
+    decision_reason: str | None
+    created_at: UTCDateTime
+
+
+class CandidateAINoteOut(_Out):
+    """AI生成の補助情報（読み取りのみ。Evidence ではない）。"""
+
+    id: UUID
+    organization_id: UUID
+    candidate_id: UUID
+    execution_id: UUID
+    note: str
+    llm_provider: str | None
+    llm_model: str | None
+    prompt_key: str | None
+    prompt_version: str | None
+    created_at: UTCDateTime
+
+
+class CandidateAcceptedOut(BaseModel):
+    candidate: EvidenceCandidateOut
+    evidence: EvidenceOut
+
+
+class CandidateBulkAcceptedOut(BaseModel):
+    accepted: list[EvidenceOut]
+    # 承認の時点で重複と分かり、Evidence にしなかった候補
+    duplicates: list[EvidenceCandidateOut]

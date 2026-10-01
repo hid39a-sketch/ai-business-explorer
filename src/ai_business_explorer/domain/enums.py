@@ -106,6 +106,33 @@ class StageRunTrigger(StrEnum):
     SEND_BACK = "send_back"
 
 
+class StageRunMode(StrEnum):
+    """ステージ実行の方式（第2回仕様 2章・E-02・R-07）。
+
+    analyze：分析を作る（既定）。collect_only：Tool で Evidence 候補を集めるだけで、分析は作らない。
+    collect_only は「最新の試行は1つ」の制約にも、後続ステージの入力にも数えない。
+    """
+
+    ANALYZE = "analyze"
+    COLLECT_ONLY = "collect_only"
+
+
+class AcquisitionMethod(StrEnum):
+    """Evidence の取得方法（第2回仕様 3章）。"""
+
+    HUMAN_INPUT = "human_input"
+    TOOL = "tool"
+
+
+class CandidateStatus(StrEnum):
+    """Evidence 候補の状態（第2回仕様 2章）。duplicate は重複判定で自動設定される。"""
+
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    DUPLICATE = "duplicate"
+
+
 class RunStatus(StrEnum):
     """stage_runs / executions の状態。queued → running → succeeded / failed。
 
