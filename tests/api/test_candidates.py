@@ -24,7 +24,7 @@ from ai_business_explorer.agents.base import (
     EvidenceRef,
 )
 from ai_business_explorer.application.candidates import delete_expired_tool_data
-from ai_business_explorer.domain.enums import ClaimKind
+from ai_business_explorer.domain.enums import ClaimKind, EvidenceRelation
 from ai_business_explorer.infrastructure.db.models import (
     Analysis,
     Evidence,
@@ -115,7 +115,9 @@ class _Collector(Agent):
                     id="e1",
                     text="市場は大きい",
                     kind=ClaimKind.EVIDENCE_BASED,
-                    evidence_refs=[EvidenceRef(evidence_id=ids[0])],
+                    evidence_refs=[
+                        EvidenceRef(evidence_id=ids[0], relation=EvidenceRelation.SUPPORTS)
+                    ],
                 )
             ]
         targets = [self.note_for] if self.note_for else ids
@@ -371,6 +373,8 @@ def test_candidates_cannot_be_cited_as_evidence(api: Api, collector: dict[str, A
         _Collector.cite_candidate = False
     [ex] = run["executions"]
     assert (run["status"], ex["error_type"]) == ("failed", "validation_error")
+    # 候補は実行の入力（承認済みの Evidence）に含まれないので拒否される
+    assert "outside the execution input" in ex["error_message"]
     # 集めた候補（原情報）は残る。分析は作らない
     assert len(api.items(f"/explorations/{exp['id']}/evidence-candidates")) == 1
     assert api.items(f"/explorations/{exp['id']}/analyses") == []

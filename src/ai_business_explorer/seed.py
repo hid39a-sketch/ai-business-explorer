@@ -61,6 +61,7 @@ SEED_EMPLOYEES = [
         "stage_key": IDEA_GENERATION,
         "implementation_key": "idea_generator",
         "prompt_key": "idea_generator",
+        "prompt_version": "v1",
     },
     {
         "key": "market_researcher",
@@ -73,6 +74,9 @@ SEED_EMPLOYEES = [
         "stage_key": "market_research",
         "implementation_key": "market_researcher",
         "prompt_key": "market_researcher",
+        # v2：relation の意味（主張の内容と Evidence の関係）を明記した版。v1 は変更しない。
+        # seed は AI社員がないときだけ作るので、既存の DB の AI社員は書き換えない
+        "prompt_version": "v2",
     },
 ]
 
@@ -163,7 +167,6 @@ def _create_employee(session: Session, registry: AgentRegistry, spec: dict[str, 
     employee = AIEmployee(
         **spec,
         organization_id=DEFAULT_ORGANIZATION_ID,
-        prompt_version="v1",
         llm_config={"provider": FAKE_PROVIDER, "model": FAKE_MODEL},
         allowed_tools=[],
         input_format=agent.input_model.model_json_schema(),

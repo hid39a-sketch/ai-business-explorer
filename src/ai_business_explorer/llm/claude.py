@@ -12,8 +12,13 @@ LLMClient の実装の1つ。AI社員・ドメインは llm/base.py の型だけ
 - 呼び出しの上限秒数（R-20 の LLM 1回 120秒）は LLMRequest.timeout_seconds で受け取る。
 - 送ってよいデータ分類の確認は、呼び出しの前にステージ実行側で行う（11章）。このモジュールは
   渡されたものを送るだけ。
+- 出力の形は構造化出力（output_config.format＝json_schema）で指定する。LLMRequest.response_schema
+  （AI社員の出力モデルの JSON Schema）を anthropic.transform_schema で API が受け付ける形にして
+  送り、応答の JSON を LLMResponse.structured に入れる。「```json」の囲みなどを外す処理はしない。
+  スキーマで表せない制約（C-09 など）は、これまでどおり AI社員とステージ実行側で検証する。
 """
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -72,6 +77,13 @@ class ClaudeLLMClient:
             "system": request.system,
             "messages": [{"role": m.role, "content": m.content} for m in request.messages],
         }
+        if request.response_schema is not None:
+            params["output_config"] = {
+                "format": {
+                    "type": "json_schema",
+                    "schema": anthropic.transform_schema(request.response_schema),
+                }
+            }
         try:
             message = client.messages.create(**params)
         except anthropic.APITimeoutError as exc:
@@ -127,4 +139,15 @@ def _to_response(message: Any, request: LLMRequest) -> LLMResponse:
         raise LLMResponseError(f"Claude declined the request (category={category})", response)
     if stop_reason == "max_tokens":
         raise LLMResponseError("Claude response was truncated at max_tokens", response)
+    if request.response_schema is not None:
+        response = response.model_copy(update={"structured": _structured(text)})
     return response
+
+
+def _structured(text: str) -> dict[str, Any] | None:
+    """構造化出力の応答（JSON オブジェクト）。JSON でなければ None（AI社員の検証で失敗になる）。"""
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None

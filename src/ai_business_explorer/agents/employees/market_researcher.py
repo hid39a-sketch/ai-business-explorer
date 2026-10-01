@@ -11,6 +11,7 @@ from ai_business_explorer.agents.base import (
     Claim,
     EvidenceView,
     IdeaView,
+    output_schema_for,
     parse_json_object,
 )
 from ai_business_explorer.llm.base import LLMMessage, LLMRequest
@@ -52,7 +53,10 @@ class MarketResearcher(Agent):
                 messages=[LLMMessage(role="user", content=payload.model_dump_json())],
                 prompt_key=ctx.prompt.key,
                 prompt_version=ctx.prompt.version,
-                response_schema=MarketResearcherOutput.model_json_schema(),
+                # 入力した Evidence の ID だけを参照できる（0件なら evidence_based を出せない）
+                response_schema=output_schema_for(
+                    MarketResearcherOutput, [e.id for e in ctx.evidence]
+                ),
             )
         )
         raw = (
