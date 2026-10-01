@@ -177,9 +177,12 @@ class AnalysisOut(_Out):
     created_at: datetime
 
 
-class EvidenceLinkOut(_Out):
-    evidence_id: UUID
+class EvidenceLinkOut(BaseModel):
+    """主張と Evidence の関係。claim_ref は AI が付けた主張のID（claims.claim_key）。"""
+
+    claim_id: UUID
     claim_ref: str
+    evidence_id: UUID
     relation: str
 
 
@@ -187,6 +190,7 @@ class HumanReviewOut(_Out):
     id: UUID
     organization_id: UUID
     analysis_id: UUID
+    claim_id: UUID | None
     exploration_id: UUID
     idea_id: UUID | None
     reviewer_actor_id: UUID
@@ -196,7 +200,23 @@ class HumanReviewOut(_Out):
     created_at: datetime
 
 
+class ClaimOut(BaseModel):
+    id: UUID
+    claim_key: str
+    ordinal: int
+    kind: str
+    text: str
+    evidence_links: list[EvidenceLinkOut]
+    latest_review: HumanReviewOut | None
+
+
 class AnalysisDetailOut(AnalysisOut):
+    """主張と根拠は claims / claim_evidence_links（正本）から返す。
+
+    body は生成時点のAI出力スナップショット。
+    """
+
+    claims: list[ClaimOut]
     evidence_links: list[EvidenceLinkOut]
     human_reviews: list[HumanReviewOut]
 

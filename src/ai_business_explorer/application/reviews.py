@@ -12,6 +12,7 @@ from ai_business_explorer.domain.errors import DomainValidationError, InvalidSta
 from ai_business_explorer.infrastructure.db.models import Actor, HumanDecision, HumanReview
 from ai_business_explorer.infrastructure.db.repositories import (
     AnalysisRepository,
+    ClaimRepository,
     HumanDecisionRepository,
     HumanReviewRepository,
     IdeaRepository,
@@ -23,14 +24,20 @@ class ReviewService:
         self.session = session
         self.reviews = HumanReviewRepository(session)
         self.analyses = AnalysisRepository(session)
+        self.claims = ClaimRepository(session)
 
     def create(self, actor: Actor, analysis_id: UUID, cmd: HumanReviewCreate) -> HumanReview:
         require_human(actor, "review analyses")
         analysis = self.analyses.get_or_raise(analysis_id)
+        if cmd.claim_id is not None:
+            claim = self.claims.get_or_raise(cmd.claim_id)
+            if claim.analysis_id != analysis.id:
+                raise DomainValidationError("claim does not belong to the analysis")
         review = self.reviews.add(
             HumanReview(
                 organization_id=analysis.organization_id,
                 analysis_id=analysis.id,
+                claim_id=cmd.claim_id,
                 exploration_id=analysis.exploration_id,
                 idea_id=analysis.idea_id,
                 reviewer_actor_id=actor.id,
@@ -40,7 +47,24 @@ class ReviewService:
                 corrections=cmd.corrections,
             )
         )
-        # AI Analysis の本体は変更しない。レビュー状態のみ最新レビューに合わせる。
+        if cmd.claim_id is not None:
+            # 主張単位のレビューは分析全体の review_status を変えない（B-15）。
+            record_audit(
+                self.session,
+                organization_id=analysis.organization_id,
+                entity_type="analysis",
+                entity_id=analysis.id,
+                action="claim_reviewed",
+                actor_id=actor.id,
+                after={
+                    "claim_id": cmd.claim_id,
+                    "decision": cmd.decision.value,
+                    "human_review_id": review.id,
+                },
+            )
+            self.session.commit()
+            return review
+        # AI Analysis の本体は変更しない。レビュー状態のみ最新レビュー（claim_id なし）に合わせる。
         before = analysis.review_status
         analysis.review_status = REVIEW_STATUS_BY_DECISION[cmd.decision].value
         record_audit(

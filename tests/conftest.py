@@ -52,6 +52,9 @@ def session_factory(engine: Engine) -> Iterator[sessionmaker[Session]]:
     yield factory
     tables = ", ".join(t.name for t in Base.metadata.sorted_tables)
     with engine.begin() as conn:
+        # analysis_evidence_links は凍結トリガーで TRUNCATE も拒否される（migration 0003）。
+        # テストの初期化に限り、このトランザクションの中だけトリガーを無効にする。
+        conn.execute(text("SET LOCAL session_replication_role = replica"))
         conn.execute(text(f"TRUNCATE {tables} CASCADE"))
 
 

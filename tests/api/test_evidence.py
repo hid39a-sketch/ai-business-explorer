@@ -23,8 +23,9 @@ from ai_business_explorer.config import Settings
 from ai_business_explorer.infrastructure.db.models import (
     Actor,
     Analysis,
-    AnalysisEvidenceLink,
     AuditEvent,
+    Claim,
+    ClaimEvidenceLink,
     Evidence,
 )
 from ai_business_explorer.llm.fake import FakeLLMClient
@@ -431,6 +432,8 @@ def test_each_relation_type_is_stored_with_its_claim(
     idea = api.adopted_idea(exp["id"])
     ev = api.evidence(exp["id"], idea["id"])
     relations = {"c1": "supports", "c2": "contradicts", "c3": "context"}
+    # context だけでは evidence_based の根拠にならない（C-09）ので、c3 は inference にする。
+    kinds = {"c1": "evidence_based", "c2": "evidence_based", "c3": "inference"}
 
     def responder(payload: dict[str, Any]) -> dict[str, Any]:
         return _claims(
@@ -438,7 +441,7 @@ def test_each_relation_type_is_stored_with_its_claim(
                 {
                     "id": claim_id,
                     "text": f"{relation} の主張",
-                    "kind": "evidence_based",
+                    "kind": kinds[claim_id],
                     "evidence_refs": [{"evidence_id": ev["id"], "relation": relation}],
                 }
                 for claim_id, relation in relations.items()
@@ -447,13 +450,13 @@ def test_each_relation_type_is_stored_with_its_claim(
 
     status, execution = _run_market_research(session, settings, human, idea["id"], responder)
     assert status == "succeeded"
-    links = session.scalars(
-        select(AnalysisEvidenceLink).where(
-            AnalysisEvidenceLink.analysis_id == UUID(execution.output["analysis_id"])
-        )
+    rows = session.execute(
+        select(Claim.claim_key, ClaimEvidenceLink.relation, ClaimEvidenceLink.evidence_id)
+        .join(ClaimEvidenceLink, ClaimEvidenceLink.claim_id == Claim.id)
+        .where(Claim.analysis_id == UUID(execution.output["analysis_id"]))
     ).all()
-    assert {(link.claim_ref, link.relation) for link in links} == set(relations.items())
-    assert {str(link.evidence_id) for link in links} == {ev["id"]}
+    assert {(key, relation) for key, relation, _ in rows} == set(relations.items())
+    assert {str(evidence_id) for _, _, evidence_id in rows} == {ev["id"]}
 
 
 @pytest.mark.parametrize("target", ["other_idea", "retracted", "other_exploration", "unknown"])
@@ -472,7 +475,7 @@ def test_ai_cannot_cite_evidence_outside_its_input(
     }
     cited = outsiders[target]()
     analyses_before = _count(session, Analysis)
-    links_before = _count(session, AnalysisEvidenceLink)
+    links_before = _count(session, ClaimEvidenceLink)
 
     def responder(payload: dict[str, Any]) -> dict[str, Any]:
         return _claims(
@@ -488,7 +491,7 @@ def test_ai_cannot_cite_evidence_outside_its_input(
     assert status == "failed"
     assert execution.error_type == "validation_error"
     assert _count(session, Analysis) == analyses_before
-    assert _count(session, AnalysisEvidenceLink) == links_before
+    assert _count(session, ClaimEvidenceLink) == links_before
 
 
 def test_evidence_based_claim_without_refs_fails_the_execution(

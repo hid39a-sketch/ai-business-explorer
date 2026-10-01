@@ -190,16 +190,23 @@ def test_evidence_retraction_requires_reason(
     )
 
 
-def test_analysis_evidence_link_rejects_unknown_relation_and_dangling_evidence(
+def test_claim_evidence_link_rejects_dangling_claim_and_evidence(
     session: Session, exploration: Exploration, human: Actor
 ) -> None:
+    """根拠リンクの正本（claim_evidence_links）は、実在しない主張・Evidence を参照できない。
+
+    第1回の analysis_evidence_links は凍結済み（tests/integration/test_claims.py）。
+    """
     from uuid import uuid4
 
-    from ai_business_explorer.infrastructure.db.models import AnalysisEvidenceLink
+    from ai_business_explorer.infrastructure.db.models import ClaimEvidenceLink
 
     _assert_rejected(
         session,
-        lambda: AnalysisEvidenceLink(
-            analysis_id=uuid4(), evidence_id=uuid4(), claim_ref="c1", relation="supports"
+        lambda: ClaimEvidenceLink(
+            organization_id=exploration.organization_id,
+            claim_id=uuid4(),
+            evidence_id=uuid4(),
+            relation="supports",
         ),
     )
