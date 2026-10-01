@@ -52,8 +52,8 @@ PostgreSQL 16
 2. 事前検証：Idea が `adopted` か、前のステージに成功した最新の試行があるか、担当 AI社員が `active` で実装があるか。
 3. `stage_runs` と `executions` を `running` で作成してコミットする。再実行・差し戻しの場合は、対象ステージ以降の最新試行に `superseded_at` を記録する。
 4. `AgentContext`（読み取り専用の入力、LLM、ToolBox、Prompt）を組み立てて AI社員を実行する。
-5. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、Idea 候補を出せるのは idea_generation だけか。
-6. 成功した場合：`analyses`、`analysis_evidence_links`、（idea_generation なら）`candidate` の Idea を1トランザクションで保存する。
+5. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、relation の規則（重複なし、supports と contradicts の同時指定なし、`evidence_based` は supports か contradicts が必須）を守っているか、Idea 候補を出せるのは idea_generation だけか。
+6. 成功した場合：`analyses`、`claims`、`claim_evidence_links`、（idea_generation なら）`candidate` の Idea を1トランザクションで保存する。第1回の `analysis_evidence_links` には書き込まない（凍結済み）。
 7. 失敗した場合：部分的な出力をロールバックし、別トランザクションで `failed` と `error_type` を記録する。API は 500 を返さず、`failed` の stage_run を返す。
 
 ## 人間専用の操作（AI からの経路なし）
@@ -91,7 +91,7 @@ PostgreSQL 16
 | Idea の詳細項目 | 人間だけが更新する。AI が書けるのは候補生成時の title / summary / problem だけ |
 | Idea の項目の型 | すべて自由記述テキスト。スコアは持たない |
 | 調査ステータス | 保存せず、`current_stage_key` と最新の stage_run から算出する |
-| レビュー | `analyses.review_status` は ReviewService だけが更新する。修正は `human_reviews.corrections` に入れ、AI Analysis 本体は不変 |
+| レビュー | `analyses.review_status` は ReviewService だけが更新する。修正は `human_reviews.corrections` に入れ、AI Analysis 本体は不変。主張単位のレビュー（`claim_id`）は `review_status` を変えない |
 | 監査ログ | 最小限（作成・更新・状態遷移・レビュー・決定・差し戻し） |
 | LLM・ツール呼び出しの明細 | Future Extension（第1回は executions に集約） |
 | ステージの進め方 | 1ステージずつ人間が API から実行する。自動連鎖しない |

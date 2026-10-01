@@ -44,7 +44,7 @@ AI社員は DB・Repository・サービスに触れられません。このた�
 
 `AnalysisDraft` に含めるもの：
 - `summary`
-- `claims`（`kind` で根拠あり／推論／推測を区別。`evidence_based` は Evidence 参照が必須）
+- `claims`（`kind` で根拠あり／推論／推測を区別。`evidence_based` は supports か contradicts の Evidence 参照が必須。同じ Evidence への同じ relation の重複と、supports・contradicts の同時指定は不可。違反すると `validation_error`）
 - `data`（構造化出力）
 - `idea_candidates`（idea_generation のみ。AI が書けるのは title / summary / problem だけ）
 
@@ -63,6 +63,6 @@ AI社員は DB・Repository・サービスに触れられません。このた�
 4. （Fake で動かす場合）`llm/fake.py` の `DEFAULT_RESPONDERS` に応答を追加し、テストを書く
 5. API（`POST /api/v1/ai-employees`）または seed で定義を登録し、`status=active` にする
 
-DB マイグレーションは不要です。AI 出力は `analyses.body`（JSONB）に保存し、`schema_version` で区別します。
+DB マイグレーションは不要です。AI 出力は `analyses.body`（JSONB。生成時点のスナップショット）に保存し、`schema_version` で区別します。主張と根拠は共通の `claims` / `claim_evidence_links` に保存されます。
 
 同じステージに有効な AI社員が複数いる場合は、ステージ実行時に `ai_employee_id` で指定します。

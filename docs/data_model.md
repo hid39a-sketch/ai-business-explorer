@@ -15,9 +15,10 @@ explorations 1─* ideas
 explorations 1─* stage_runs (idea_generation: idea_id = NULL)
 ideas        1─* stage_runs (その他のステージ)
 stage_runs   1─* executions *─1 ai_employees
-executions   1─* analyses *─* evidence   (analysis_evidence_links)
+executions   1─* analyses 1─* claims *─* evidence   (claim_evidence_links。正本)
+analyses     *─* evidence                (analysis_evidence_links。第1回の履歴。凍結)
 analyses     1─* ideas                   (ideas.origin_analysis_id: AI が生成した Idea)
-analyses     1─* human_reviews
+analyses     1─* human_reviews *─0..1 claims (主張単位のレビュー)
 ideas        1─* human_decisions
 actors       1─* (作成者 / 起動者 / レビュアー / 決定者 / 監査ログ)
 analyses.supersedes_id → analyses            (版の連鎖)
@@ -39,25 +40,31 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 | `executions` | AI社員の実行履歴（入力、出力、エラー、使用量、各種バージョン） | `status`、`error_type` |
 | `analyses` | AI Analysis（本体は不変） | `review_status`、`version_no ≥ 1`、`execution_id NOT NULL` |
 | `evidence` | 根拠・出典（不変。訂正は撤回＋新規登録） | `source_type` に `ai_generated` を含めない、撤回日時と撤回理由は必ずセット |
-| `analysis_evidence_links` | 主張（claim_ref）と Evidence の対応 | `relation ∈ supports/contradicts/context` |
-| `human_reviews` | 人間のレビュー（追記のみ） | 複合 FK + `reviewer_actor_type = 'human'`、`decision ∈ approve/reject/request_changes/needs_more_evidence` |
+| `claims` | AI Analysis の主張（正本。不変） | `kind ∈ evidence_based/inference/speculation`、`(analysis_id, claim_key)` は一意 |
+| `claim_evidence_links` | 主張と Evidence の関係（正本。不変） | 主キーは `(claim_id, evidence_id, relation)`、`relation ∈ supports/contradicts/context`、主張・Evidence と同じ組織（複合 FK） |
+| `analysis_evidence_links` | 第1回の根拠リンク（履歴。凍結） | INSERT / UPDATE / DELETE / TRUNCATE を DB トリガーで拒否。アプリも書き込まない |
+| `human_reviews` | 人間のレビュー（追記のみ）。`claim_id` を指定すると主張単位のレビュー | 複合 FK + `reviewer_actor_type = 'human'`、`decision ∈ approve/reject/request_changes/needs_more_evidence`、`claim_id` は対象の分析の主張（複合 FK） |
 | `human_decisions` | 人間の最終判断（追記のみ） | 複合 FK + `decided_by_actor_type = 'human'`、`decision ∈ go/no_go/hold/pivot` |
 | `audit_events` | 監査ログ | `(entity_type, entity_id)` にインデックス |
 
-業務テーブル（`ai_employees`、`explorations`、`ideas`、`stage_runs`、`executions`、`analyses`、`evidence`、`human_reviews`、`human_decisions`、`audit_events`、`stage_assignments`）はすべて `organization_id` を持ちます。親から分かる場合も冗長に持ち、親子の組織の一致は複合 FK（子の `(親ID, organization_id)` → 親の `(id, organization_id)`）で保証します。
+業務テーブル（`ai_employees`、`explorations`、`ideas`、`stage_runs`、`executions`、`analyses`、`claims`、`claim_evidence_links`、`evidence`、`human_reviews`、`human_decisions`、`audit_events`、`stage_assignments`）はすべて `organization_id` を持ちます。親から分かる場合も冗長に持ち、親子の組織の一致は複合 FK（子の `(親ID, organization_id)` → 親の `(id, organization_id)`）で保証します。
 
 ### Evidence の項目（仕様書11章との対応）
 
 | 仕様書 | 列 |
 |---|---|
 | Evidence ID | `id` |
-| 調査結果ID | `analysis_evidence_links.analysis_id`（多対多。1つの Evidence を複数の分析から参照できる） |
+| 調査結果ID | `claim_evidence_links` → `claims.analysis_id`（多対多。1つの Evidence を複数の分析・主張から参照できる） |
 | 出典タイトル / URL / 出典タイプ | `title` / `url` / `source_type` |
 | 引用・要約 | `quote`（原文の引用）/ `summary`（人間が書いた要約。AI の要約は analyses 側に置く） |
 | 取得日時 / 情報の発生日 | `retrieved_at` / `published_at` |
 | その他メタデータ | `metadata`（JSONB） |
 
-### AI Analysis の本体（`analyses.body`）
+### AI Analysis の主張と本体
+
+主張と根拠は `claims` / `claim_evidence_links` が正本です。`analyses.body` は「Analysis 生成時点のAI出力スナップショット」として残し、書き換えません。両者が食い違った場合は `claims` が正しいものとします。
+
+`analyses.body`（スナップショット）の形：
 
 ```json
 {
@@ -70,7 +77,11 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 }
 ```
 
-`kind`（`evidence_based` / `inference` / `speculation`）で主張の性質を区別します。`evidence_based` の主張は Evidence への参照が必須です。
+`kind`（`evidence_based` / `inference` / `speculation`）で主張の性質を区別します。AI の出力は次の規則で検証し、違反した場合は実行を `failed`（`validation_error`）にして何も保存しません（第2回仕様 C-09）。
+
+- 同じ主張と Evidence に、同じ relation を重複して付けない。
+- 同じ主張と Evidence に、supports と contradicts を同時に付けない。
+- `evidence_based` の主張は supports か contradicts を最低1つ持つ。context だけでは根拠にならない（context は supports・contradicts と並べてよい）。
 
 ## 状態遷移
 
@@ -82,7 +93,7 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
   - 再実行：`rerun_of_id` に現在の最新試行を指定する。
   - 差し戻し：`send_back` を使う。現在のステージより前のステージを指定し、理由が必須。
   - どちらの場合も、対象ステージ以降の最新試行に `superseded_at` を記録する。
-- **analyses.review_status**：`pending_review` から、最新のレビューに応じて `approved` / `rejected` / `changes_requested` / `needs_more_evidence` に変わる。
+- **analyses.review_status**：`pending_review` から、最新のレビュー（`claim_id` のないもの）に応じて `approved` / `rejected` / `changes_requested` / `needs_more_evidence` に変わる。主張単位のレビュー（`claim_id` あり）は `review_status` を変えず、分析の応答の主張ごとに最新のレビューとして表示する。
 
 ## マイグレーション
 
@@ -90,3 +101,4 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 
 - `0001`：第1回のスキーマ。`ideas.origin_analysis_id` と `analyses` は循環参照になるため、両テーブルを作った後で FK を追加しています。
 - `0002`：組織とロール。既定組織を作り、第1回のすべての行をその組織に移します。既存の人間 actor は admin になり、system actor にはロールを付けません。組織×ステージごとに最も古い active のAI社員を primary にします。downgrade は開発用で、複数の組織に同じ key のAI社員がある場合は失敗します。
+- `0003`：主張と根拠リンク。第1回の `analyses.body.claims` から `claims` を、`analysis_evidence_links` から `claim_evidence_links` を作ります（`body` は変えない）。旧リンクを1件でも取りこぼす場合は移行を中止します。移行の後、`analysis_evidence_links` を DB トリガーで凍結します。downgrade は開発用で、0003 以降に作った分析の主張と根拠リンクは失われます。

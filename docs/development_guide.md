@@ -34,9 +34,11 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 | `tests/unit/` | ステージ定義、Fake LLM、Tool のポリシー、Prompt、AI社員、AI社員から DB への到達禁止（import 検査） |
 | `tests/integration/` | DB 制約（人間限定、ai_generated の拒否、ステージ範囲、AI 生成 Idea の出自、ロールは人間のみ、担当の制約、組織の一致） |
 | `tests/api/` | API の一連の流れ（AI社員の CRUD、Idea、実行の成功と失敗、Evidence、Analysis、Review、Decision、再実行、差し戻し、監査ログ）、ロールごとの操作の可否、組織による分離 |
-| `tests/migrations/` | migration による既存データの移行。専用のデータベース（`<TEST_DATABASE_URL のDB名>_migration`）を作って使うため、DB ユーザーに CREATE DATABASE の権限が必要 |
+| `tests/migrations/` | migration による既存データの移行。テストモジュールごとに専用のデータベース（`<TEST_DATABASE_URL のDB名>_<モジュール名>`）を作って使うため、DB ユーザーに CREATE DATABASE の権限が必要 |
 
 LLM は `FakeLLMClient` で、応答は決定的です。失敗のテストでは、`StageRunService(llm_client_factory=...)` に例外を投げる Fake を渡します。
+
+テストの初期化（各テスト後の TRUNCATE）は、凍結した `analysis_evidence_links` のトリガーに止められないよう、そのトランザクションの中だけ `session_replication_role = replica` にしています（テスト用。アプリのコードでは使わない）。
 
 ## マイグレーション
 
