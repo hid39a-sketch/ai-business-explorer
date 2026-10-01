@@ -63,6 +63,10 @@ class ToolContext(BaseModel):
     execution_id: UUID
     exploration_id: UUID
     idea_id: UUID | None = None
+    organization_id: UUID | None = None
+    # 組織の Web 取得のドメイン許可・禁止リスト（設定ファイル。第2回仕様 13章）
+    allowed_domains: tuple[str, ...] = ()
+    blocked_domains: tuple[str, ...] = ()
 
 
 class Tool(ABC):
@@ -72,6 +76,8 @@ class Tool(ABC):
     side_effect: ClassVar[ToolSideEffect]
     input_model: ClassVar[type[BaseModel]]
     output_model: ClassVar[type[BaseModel]]
+    # 1実行あたりの呼び出し回数の上限（Tool ごと。例：Web 取得は 20件。R-20）。None なら制限なし
+    max_calls_per_execution: int | None = None
 
     @abstractmethod
     def execute(self, tool_input: BaseModel, context: ToolContext) -> ToolResult: ...
@@ -130,9 +136,12 @@ class ToolBox:
         context: ToolContext,
         guard: CallGuard | None = None,
         recorder: ToolCallRecorder | None = None,
+        enabled_external_tools: frozenset[str] = frozenset(),
     ) -> None:
         self._guard = guard
         self._recorder = recorder
+        # 外部と通信する Tool は、組織で有効にしたものだけ使える（第2回仕様 13章）
+        self._enabled_external = enabled_external_tools
         self._registry = registry
         self._allowed = frozenset(allowed_tools)
         self._allowed_side_effects = frozenset(allowed_side_effects)
@@ -151,6 +160,13 @@ class ToolBox:
             raise ToolNotAllowedError(
                 f"tool '{name}' side_effect '{tool.side_effect}' is not allowed"
             )
+        if tool.side_effect is ToolSideEffect.WRITE:
+            raise ToolNotAllowedError(f"tool '{name}' writes externally and is never allowed")
+        if (
+            tool.side_effect is ToolSideEffect.EXTERNAL_READ
+            and tool.name not in self._enabled_external
+        ):
+            raise ToolNotAllowedError(f"tool '{name}' is not enabled for this organization")
         parsed = tool.input_model.model_validate(tool_input)
         if self._recorder is not None:
             self._recorder.before_tool_call(tool)

@@ -22,8 +22,17 @@ class Settings(BaseSettings):
     # 将来の LLM 接続用。第1回では使用しない。
     llm_api_key: SecretStr | None = None
 
-    # AI社員が使えるツールの副作用区分。第1回は読み取り専用のみ。
-    tool_allowed_side_effects: list[ToolSideEffect] = [ToolSideEffect.READ_ONLY]
+    # AI社員が使えるツールの副作用区分（第2回仕様 13章）。外部への読み取り（external_read）まで。
+    # 外部に書き込む write は設定しても拒否する。外部 Tool は組織ごとの有効化も必要
+    # （TOOL_CONFIG_PATH）
+    tool_allowed_side_effects: list[ToolSideEffect] = [
+        ToolSideEffect.READ_ONLY,
+        ToolSideEffect.EXTERNAL_READ,
+    ]
+    # 組織ごとの Tool 設定ファイル（JSON）。なければ外部 Tool は使えない
+    tool_config_path: str | None = None
+    # Web 取得で送る User-Agent。未設定なら既定値（製品名とバージョン）
+    web_fetch_user_agent: str | None = None
 
     # 実行記録に残すコードバージョン。未設定なら git から取得を試みる。
     code_version: str | None = None
@@ -43,6 +52,13 @@ class Settings(BaseSettings):
     # （例：{"fake": "internal"}）。指定のないプロバイダーは internal。契約条件を確認するまでは
     # internal のままにする。restricted はどの LLM にも送らない（設定しても拒否する）。
     llm_max_classification: dict[str, DataClassification] = {}
+
+    @field_validator("tool_allowed_side_effects")
+    @classmethod
+    def _write_is_never_allowed(cls, value: list[ToolSideEffect]) -> list[ToolSideEffect]:
+        if ToolSideEffect.WRITE in value:
+            raise ValueError("tools that write externally are not allowed")
+        return value
 
     @field_validator("llm_max_classification")
     @classmethod

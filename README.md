@@ -58,6 +58,8 @@ LLM・Tool の呼び出しは費用とともに記録され、組織の月額予
 
 Tool が取得した情報は Evidence 候補になり、人間（member 以上）が承認したものだけが Evidence になります。`POST .../stage-runs` に `"mode": "collect_only"` を指定すると候補を集めるだけの実行になり（分析は作らない）、`GET /api/v1/explorations/{id}/evidence-candidates` で確認して `POST /api/v1/evidence-candidates/{id}/accept`（または `/reject`、`/bulk-accept`）で判断します。AI が書いた要約は「AI生成の補助情報」として候補とは別に保存され（`/ai-notes`、読み取りのみ）、Evidence には入りません。
 
+Web から情報を集める Tool は、URL を指定して公開ページを取得する `web_fetch` だけです（検索 API はありません）。使うには組織の設定ファイル（`TOOL_CONFIG_PATH`。例：`config/tools.example.json`）で有効にし、利用規約と robots.txt を確認したドメインを許可リストに入れます。HTTPS・443 番ポートだけに接続し、社内やクラウドのメタデータなど公開されていないアドレスには接続しません。
+
 一覧 API は `{"items": [...], "next_cursor": ..., "has_more": ...}` を返します（`limit` は既定 50・最大 200、続きは `cursor` に前の応答の `next_cursor` を渡す）。Evidence の一覧は既定で active（有効）なものだけを返し、`status`（`active` / `superseded` / `retracted` / `purged`、繰り返し指定可）で状態を指定できます。日時はすべて UTC（末尾 `Z`）です。
 
 > ⚠️ `X-Actor-Id` は認証ではありません。ヘッダの値をそのまま信頼する簡易方式で、第2回も同じです。ヘッダを偽ればどのロールでも操作できるため、ロールは誤操作の防止にしかならず、不正は防げません。外部に公開する環境では使えません。

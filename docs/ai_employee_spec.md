@@ -50,6 +50,8 @@ AI社員は DB・Repository・サービスに触れられません。このた�
 - `idea_candidates`（idea_generation のみ。AI が書けるのは title / summary / problem だけ）
 - `candidate_notes`（AI生成の補助情報。この実行で Tool が返した候補の `candidate_id` を指す。Evidence 候補・Evidence とは別のテーブルに保存され、Evidence に移ることはない。他の実行の候補を指すと `validation_error`）
 
+使える Tool は `web_fetch`（URL を指定して公開 Web ページを取得する。external_read）です。AI社員の `allowed_tools` に入れ、組織の設定ファイルで有効にしたときだけ使えます（[Architecture](architecture.md) の「Web 取得 Tool」）。結果（`ToolResult.output`）には最終 URL・状態・種類・タイトル・文字数だけが入り、応答ヘッダーは入りません。
+
 Tool の結果（`ToolResult.evidence_candidates`）は、仕組みが Evidence 候補として保存し、`candidate_id` を付けて AI社員に返します。候補に入れてよいのは Tool が外部から取得した原情報（URL、title、取得日時、メタデータ、抜粋・全文）だけです。未承認の候補は AI の入力にも根拠にもならず、`evidence_refs` に候補の ID を指定すると `validation_error` になります。
 
 ## 第1回の AI社員（Fake）

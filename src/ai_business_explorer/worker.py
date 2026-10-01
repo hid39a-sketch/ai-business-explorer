@@ -28,7 +28,8 @@ from ai_business_explorer.config import Settings, get_settings
 from ai_business_explorer.infrastructure.db.models import StageRun
 from ai_business_explorer.infrastructure.db.repositories import scope_to_organization
 from ai_business_explorer.infrastructure.db.session import build_engine, build_session_factory
-from ai_business_explorer.tools.base import ToolRegistry, default_tool_registry
+from ai_business_explorer.tools.base import ToolRegistry
+from ai_business_explorer.tools.defaults import build_tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ def main() -> None:
     settings = get_settings()
     session_factory = build_session_factory(build_engine(settings.database_url))
     agents = build_default_registry()
+    tools = build_tool_registry(settings.web_fetch_user_agent)
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     stopping = threading.Event()
 
@@ -105,9 +107,7 @@ def main() -> None:
     logger.info("worker %s started", worker_id)
     while not stopping.is_set():
         try:
-            processed = run_once(
-                session_factory, settings, agents, default_tool_registry, worker_id
-            )
+            processed = run_once(session_factory, settings, agents, tools, worker_id)
         except Exception:
             logger.exception("worker iteration failed")
             processed = False

@@ -124,6 +124,7 @@ from ai_business_explorer.llm.base import LLMClient, LLMError, TrackingLLMClient
 from ai_business_explorer.llm.factory import build_llm_client, resolve_llm_config
 from ai_business_explorer.prompts.loader import load_prompt, prompt_exists
 from ai_business_explorer.tools.base import ToolBox, ToolContext, ToolError, ToolRegistry
+from ai_business_explorer.tools.config import load_tool_config
 
 LLMClientFactory = Callable[[str], LLMClient]
 
@@ -743,6 +744,11 @@ class StageRunService:
                 )
             agent = self._agent_for(employee)
             _, model = resolve_llm_config(employee.llm_config, self.settings.llm_provider)
+            # 組織ごとの Tool 設定（外部 Tool の有効化・ドメインの許可リスト。第2回仕様 13章）
+            tool_config = load_tool_config(self.settings.tool_config_path)
+            allowed_domains, blocked_domains = tool_config.web_fetch_domains(
+                execution.organization_id
+            )
             # 費用と呼び出しの記録・上限（第2回仕様 10・12章）。取り消しの確認の後に計測する
             meter = ExecutionMeter(
                 self.session, self.settings, execution, stage_run.exploration_id, classification
@@ -763,9 +769,13 @@ class StageRunService:
                     execution_id=execution.id,
                     exploration_id=exploration.id,
                     idea_id=idea.id if idea else None,
+                    organization_id=execution.organization_id,
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
                 ),
                 guard=guard,
                 recorder=meter,
+                enabled_external_tools=tool_config.enabled_tools(execution.organization_id),
             )
             ctx = AgentContext(
                 exploration=ExplorationView.model_validate(exploration, from_attributes=True),
