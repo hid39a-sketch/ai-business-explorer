@@ -55,9 +55,19 @@ class AnalysisView(_Frozen):
     summary: str
 
 
+# 主張と Evidence の関係（第2回仕様 D-15・C-09）。docstring は出力スキーマの description として
+# LLM にも渡るので、意味の定義だけを書く。relation は必須で、省略した出力は validation_error に
+# なる（既定値で supports とみなさない）。
 class EvidenceRef(BaseModel):
+    """relation は、主張（claim）の内容と Evidence の関係（Idea の前提との関係ではない）。
+
+    supports：Evidence がその主張の内容を支持する。
+    contradicts：Evidence がその主張の内容を否定する。
+    context：Evidence は主張の真偽を直接支持・否定せず、前提・背景などの文脈を提供する。
+    """
+
     evidence_id: UUID
-    relation: EvidenceRelation = EvidenceRelation.SUPPORTS
+    relation: EvidenceRelation
 
 
 class Claim(BaseModel):
@@ -73,6 +83,8 @@ class Claim(BaseModel):
         - 同じ Evidence に同じ relation を重複して付けない。
         - 同じ Evidence に supports と contradicts を同時に付けない。
         - evidence_based の主張は supports か contradicts を最低1つ持つ（context だけでは不可）。
+          evidence_based は「Evidence によって真偽が評価された主張」で、否定（contradicts）された
+          主張も含む。
         """
         pairs = [(ref.evidence_id, ref.relation) for ref in self.evidence_refs]
         if len(pairs) != len(set(pairs)):
@@ -172,3 +184,37 @@ def parse_json_object(text: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise AgentOutputError("LLM response must be a JSON object")
     return value
+
+
+def output_schema_for(output_model: type[BaseModel], evidence_ids: list[UUID]) -> dict[str, Any]:
+    """実行ごとの出力スキーマ（LLMRequest.response_schema）。Pydantic のモデルから作る。
+
+    構造化出力に使うスキーマは出力モデルの JSON Schema を正本にし、実行ごとに次だけを変える。
+    - Evidence がある：evidence_id を、この実行で入力した Evidence の ID の enum に限定する
+      （入力外の ID を出力できない）。
+    - Evidence が0件：主張から evidence_refs を除き、kind を inference / speculation に限定する
+      （根拠のない evidence_based を出力できない）。
+    スキーマで表せない制約（C-09 の組み合わせ・文字数など）は、これまでどおり Pydantic と
+    ステージ実行側の検証で確かめる。
+    """
+    schema = output_model.model_json_schema()
+    defs = schema.get("$defs", {})
+    claim = defs.get("Claim")
+    if claim is None:
+        return schema
+    if evidence_ids:
+        defs["EvidenceRef"]["properties"]["evidence_id"] = {
+            "type": "string",
+            "title": "Evidence Id",
+            "enum": [str(evidence_id) for evidence_id in evidence_ids],
+        }
+        return schema
+    claim["properties"].pop("evidence_refs", None)
+    claim["properties"]["kind"] = {
+        "type": "string",
+        "title": "Kind",
+        "enum": [ClaimKind.INFERENCE.value, ClaimKind.SPECULATION.value],
+    }
+    for name in ("EvidenceRef", "EvidenceRelation", "ClaimKind"):
+        defs.pop(name, None)
+    return schema

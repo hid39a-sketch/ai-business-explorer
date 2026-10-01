@@ -9,6 +9,7 @@ from ai_business_explorer.agents.base import (
     Claim,
     ExplorationView,
     IdeaCandidate,
+    output_schema_for,
     parse_json_object,
 )
 from ai_business_explorer.domain.stages import IDEA_GENERATION
@@ -44,7 +45,8 @@ class IdeaGenerator(Agent):
                 messages=[LLMMessage(role="user", content=payload.model_dump_json())],
                 prompt_key=ctx.prompt.key,
                 prompt_version=ctx.prompt.version,
-                response_schema=IdeaGeneratorOutput.model_json_schema(),
+                # Evidence を受け取らないので、Evidence 0件のスキーマ（evidence_based を出せない）
+                response_schema=output_schema_for(IdeaGeneratorOutput, []),
             )
         )
         raw = (
