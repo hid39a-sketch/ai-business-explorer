@@ -35,7 +35,7 @@ def test_idea_generation_success_records_execution_and_candidates(api: Api) -> N
     assert ex["usage"]["llm_calls"] == 1
     assert ex["input"]["research_question"] == "何が有望か"
 
-    ideas = api.get(f"/explorations/{exp['id']}/ideas")
+    ideas = api.items(f"/explorations/{exp['id']}/ideas")
     assert len(ideas) == 3
     assert {i["adoption_status"] for i in ideas} == {"candidate"}
     assert {i["origin_type"] for i in ideas} == {"ai"}
@@ -49,7 +49,7 @@ def test_idea_generation_success_records_execution_and_candidates(api: Api) -> N
 def test_ai_generated_candidate_cannot_run_stages_until_adopted(api: Api) -> None:
     exp = api.exploration()
     api.post(f"/explorations/{exp['id']}/stage-runs", {})
-    idea = api.get(f"/explorations/{exp['id']}/ideas")[0]
+    idea = api.items(f"/explorations/{exp['id']}/ideas")[0]
     api.post(f"/ideas/{idea['id']}/stage-runs", {"stage_key": "market_research"}, expect=409)
     api.post(f"/ideas/{idea['id']}/adopt", {}, expect=200)
     run = api.post(f"/ideas/{idea['id']}/stage-runs", {"stage_key": "market_research"})
@@ -90,7 +90,7 @@ def test_archived_exploration_cannot_run(api: Api) -> None:
 
 def test_unavailable_llm_provider_records_failed_execution(api: Api) -> None:
     exp = api.exploration()
-    ig = next(e for e in api.get("/ai-employees") if e["key"] == "idea_generator")
+    ig = next(e for e in api.items("/ai-employees") if e["key"] == "idea_generator")
     api.patch(f"/ai-employees/{ig['id']}", {"llm_config": {"provider": "openai", "model": "x"}})
     run = api.post(f"/explorations/{exp['id']}/stage-runs", {})
     assert run["status"] == "failed"
@@ -99,8 +99,8 @@ def test_unavailable_llm_provider_records_failed_execution(api: Api) -> None:
     assert ex["error_type"] == "llm_error"
     assert "not available" in ex["error_message"]
     assert ex["output"] is None
-    assert api.get(f"/explorations/{exp['id']}/ideas") == []
-    assert api.get(f"/explorations/{exp['id']}/analyses") == []
+    assert api.items(f"/explorations/{exp['id']}/ideas") == []
+    assert api.items(f"/explorations/{exp['id']}/analyses") == []
     # 失敗した試行は rerun_of_id で再実行できる
     api.patch(f"/ai-employees/{ig['id']}", {"llm_config": {"provider": "fake"}})
     rerun = api.post(f"/explorations/{exp['id']}/stage-runs", {"rerun_of_id": run["id"]})
@@ -158,5 +158,5 @@ def test_execution_lookup(api: Api) -> None:
     ex_id = run["executions"][0]["id"]
     assert api.get(f"/executions/{ex_id}")["stage_run_id"] == run["id"]
     assert api.get(f"/stage-runs/{run['id']}")["id"] == run["id"]
-    assert len(api.get(f"/explorations/{exp['id']}/stage-runs")) == 1
-    assert len(api.get("/stages")) == 9
+    assert len(api.items(f"/explorations/{exp['id']}/stage-runs")) == 1
+    assert len(api.items("/stages")) == 9

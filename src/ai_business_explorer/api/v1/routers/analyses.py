@@ -2,17 +2,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from ai_business_explorer.api.v1.deps import ReviewerDep, SessionDep
+from ai_business_explorer.api.v1.deps import PageDep, ReviewerDep, SessionDep
 from ai_business_explorer.api.v1.schemas import (
     AnalysisDetailOut,
     AnalysisOut,
     ClaimOut,
     EvidenceLinkOut,
     HumanReviewOut,
+    PageOut,
 )
 from ai_business_explorer.application.analyses import AnalysisService, ClaimDetail
 from ai_business_explorer.application.commands import HumanReviewCreate
 from ai_business_explorer.application.reviews import ReviewService
+from ai_business_explorer.domain.evidence import EvidenceState
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
 
@@ -20,7 +22,7 @@ router = APIRouter(prefix="/analyses", tags=["analyses"])
 @router.get("/{analysis_id}", response_model=AnalysisDetailOut)
 def get_analysis(analysis_id: UUID, session: SessionDep) -> object:
     detail = AnalysisService(session).get(analysis_id)
-    claims = [_claim_out(c) for c in detail.claims]
+    claims = [_claim_out(c, detail.evidence_states) for c in detail.claims]
     return AnalysisDetailOut(
         **AnalysisOut.model_validate(detail.analysis).model_dump(),
         claims=claims,
@@ -29,7 +31,7 @@ def get_analysis(analysis_id: UUID, session: SessionDep) -> object:
     )
 
 
-def _claim_out(detail: ClaimDetail) -> ClaimOut:
+def _claim_out(detail: ClaimDetail, states: dict[UUID, EvidenceState]) -> ClaimOut:
     claim = detail.claim
     return ClaimOut(
         id=claim.id,
@@ -43,6 +45,11 @@ def _claim_out(detail: ClaimDetail) -> ClaimOut:
                 claim_ref=claim.claim_key,
                 evidence_id=link.evidence_id,
                 relation=link.relation,
+                evidence_status=states[link.evidence_id].status.value,
+                evidence_is_retracted=states[link.evidence_id].is_retracted,
+                evidence_is_superseded=states[link.evidence_id].is_superseded,
+                evidence_is_purged=states[link.evidence_id].is_purged,
+                evidence_superseded_by_id=states[link.evidence_id].superseded_by_id,
             )
             for link in detail.evidence_links
         ],
@@ -64,6 +71,6 @@ def create_human_review(
     return ReviewService(session).create(actor, analysis_id, body)
 
 
-@router.get("/{analysis_id}/human-reviews", response_model=list[HumanReviewOut])
-def list_human_reviews(analysis_id: UUID, session: SessionDep) -> object:
-    return ReviewService(session).list_for_analysis(analysis_id)
+@router.get("/{analysis_id}/human-reviews", response_model=PageOut[HumanReviewOut])
+def list_human_reviews(analysis_id: UUID, session: SessionDep, page: PageDep) -> object:
+    return ReviewService(session).list_for_analysis(analysis_id, page)

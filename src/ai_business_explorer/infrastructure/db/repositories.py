@@ -10,10 +10,11 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, select
-from sqlalchemy.orm import Session
+from sqlalchemy import ColumnElement, Select, and_, exists, false, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from ai_business_explorer.domain.errors import NotFoundError
+from ai_business_explorer.domain.evidence import EvidenceStatus
 from ai_business_explorer.infrastructure.db.base import Base
 from ai_business_explorer.infrastructure.db.models import (
     Actor,
@@ -72,8 +73,12 @@ class Repository[M: Base]:
         self.session.flush()
         return obj
 
+    def select(self, *criteria: ColumnElement[bool]) -> Select[tuple[M]]:
+        """組織の範囲で絞り込んだ select（ページングなどに使う）。"""
+        return select(self.model).where(*criteria, *self._organization_criteria())
+
     def list_where(self, *criteria: ColumnElement[bool], order_by: Any = None) -> Sequence[M]:
-        stmt = select(self.model).where(*criteria, *self._organization_criteria())
+        stmt = self.select(*criteria)
         stmt = stmt.order_by(order_by if order_by is not None else self.model.created_at)  # type: ignore[attr-defined]
         return self.session.scalars(stmt).all()
 
@@ -88,14 +93,12 @@ class Repository[M: Base]:
 class ActorRepository(Repository[Actor]):
     model = Actor
 
-    def list_in_organization(self, organization_id: UUID) -> Sequence[Actor]:
-        stmt = (
+    def select_in_organization(self, organization_id: UUID) -> Select[tuple[Actor]]:
+        return (
             select(Actor)
             .join(OrganizationMembership, OrganizationMembership.actor_id == Actor.id)
             .where(OrganizationMembership.organization_id == organization_id)
-            .order_by(Actor.created_at)
         )
-        return self.session.scalars(stmt).all()
 
 
 class OrganizationMembershipRepository(Repository[OrganizationMembership]):
@@ -160,10 +163,6 @@ class StageRunRepository(Repository[StageRun]):
         attempts = self.session.scalars(stmt).all()
         return max(attempts, default=0) + 1
 
-    def list_for(self, exploration_id: UUID, idea_id: UUID | None) -> Sequence[StageRun]:
-        stmt = select(StageRun).where(*self._scope(exploration_id, idea_id))
-        return self.session.scalars(stmt.order_by(StageRun.started_at)).all()
-
     def latest(self, exploration_id: UUID, idea_id: UUID | None) -> StageRun | None:
         stmt = (
             select(StageRun)
@@ -200,6 +199,53 @@ class AnalysisRepository(Repository[Analysis]):
 
 class EvidenceRepository(Repository[Evidence]):
     model = Evidence
+
+    @staticmethod
+    def _has_successor() -> ColumnElement[bool]:
+        newer = aliased(Evidence)
+        return exists().where(newer.supersedes_evidence_id == Evidence.id)
+
+    @classmethod
+    def status_criteria(cls, statuses: Sequence[EvidenceStatus]) -> ColumnElement[bool]:
+        """状態（優先順位 purged > retracted > superseded > active）で絞る条件。"""
+        purged = Evidence.content_purged_at.is_not(None)
+        not_purged = Evidence.content_purged_at.is_(None)
+        retracted = Evidence.retracted_at.is_not(None)
+        not_retracted = Evidence.retracted_at.is_(None)
+        superseded = cls._has_successor()
+        by_status: dict[EvidenceStatus, ColumnElement[bool]] = {
+            EvidenceStatus.PURGED: purged,
+            EvidenceStatus.RETRACTED: and_(not_purged, retracted),
+            EvidenceStatus.SUPERSEDED: and_(not_purged, not_retracted, superseded),
+            EvidenceStatus.ACTIVE: and_(not_purged, not_retracted, ~superseded),
+        }
+        if not statuses:
+            return false()
+        return or_(*(by_status[s] for s in statuses))
+
+    def successors(self, evidence_ids: Sequence[UUID]) -> dict[UUID, UUID]:
+        """旧版の ID → 更新版の ID。"""
+        if not evidence_ids:
+            return {}
+        stmt = select(Evidence.supersedes_evidence_id, Evidence.id).where(
+            Evidence.supersedes_evidence_id.in_(evidence_ids)
+        )
+        return {old: new for old, new in self.session.execute(stmt).tuples() if old is not None}
+
+    def duplicates(
+        self, organization_id: UUID, exploration_id: UUID, source_key: str | None, content_hash: str
+    ) -> Sequence[Evidence]:
+        """同じ組織・探索案件の active な Evidence のうち、出典か内容が同じもの（第2回 4章）。"""
+        same = Evidence.content_hash == content_hash
+        if source_key is not None:
+            same = or_(same, Evidence.source_key == source_key)
+        stmt = select(Evidence).where(
+            Evidence.organization_id == organization_id,
+            Evidence.exploration_id == exploration_id,
+            self.status_criteria([EvidenceStatus.ACTIVE]),
+            same,
+        )
+        return self.session.scalars(stmt.order_by(Evidence.created_at, Evidence.id)).all()
 
 
 class ClaimRepository(Repository[Claim]):

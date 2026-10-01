@@ -36,7 +36,7 @@ def test_create_get_update_idea_with_japanese_profile(api: Api) -> None:
     updated = api.patch(f"/ideas/{idea['id']}", {"target_customer": "士業事務所"})
     assert updated["target_customer"] == "士業事務所"
     assert updated["title"] == PROFILE["title"]
-    listed = api.get(f"/explorations/{exp['id']}/ideas")
+    listed = api.items(f"/explorations/{exp['id']}/ideas")
     assert [i["id"] for i in listed] == [idea["id"]]
 
 
@@ -44,7 +44,7 @@ def test_one_exploration_has_many_ideas(api: Api) -> None:
     exp = api.exploration()
     for n in range(3):
         api.post(f"/explorations/{exp['id']}/ideas", {"title": f"案{n}"})
-    assert len(api.get(f"/explorations/{exp['id']}/ideas")) == 3
+    assert len(api.items(f"/explorations/{exp['id']}/ideas")) == 3
 
 
 def test_adopt_and_reject_are_one_way_from_candidate(api: Api) -> None:

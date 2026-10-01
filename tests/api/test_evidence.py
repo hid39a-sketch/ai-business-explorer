@@ -71,6 +71,7 @@ def test_create_and_get_round_trip_with_all_spec_fields(api: Api) -> None:
         ),
     )
     fetched = api.get(f"/evidence/{created['id']}")
+    assert created.pop("warnings") == []  # 登録の応答だけに付く（重複の通知。Q4）
     times = ("published_at", "retrieved_at")
     assert {k: v for k, v in fetched.items() if k not in times} == {
         k: v for k, v in created.items() if k not in times
@@ -303,15 +304,16 @@ def test_lists_are_scoped_to_exploration_and_idea(api: Api) -> None:
     ev_b = api.evidence(exp["id"], idea_b["id"], title="Bの根拠")
     api.evidence(other_exp["id"], None, title="別案件")
 
-    exp_ids = {e["id"] for e in api.get(f"/explorations/{exp['id']}/evidence")}
+    exp_ids = {e["id"] for e in api.items(f"/explorations/{exp['id']}/evidence")}
     assert exp_ids == {exp_level["id"], ev_a["id"], ev_b["id"]}
     # Idea ごとの一覧: 自分の Evidence は含み、他の Idea・他の案件の Evidence は含まない。
-    # 案件全体の Evidence を含めるかは未確定（Open Question）のため確認しない。
+    # 既定（scope=with_exploration）は案件全体の Evidence も含む（AI の入力範囲と同じ。Q3）。
     for idea, own, others in ((idea_a, ev_a, ev_b), (idea_b, ev_b, ev_a)):
-        ids = {e["id"] for e in api.get(f"/ideas/{idea['id']}/evidence")}
-        assert own["id"] in ids
+        ids = {e["id"] for e in api.items(f"/ideas/{idea['id']}/evidence")}
+        assert ids == {own["id"], exp_level["id"]}
         assert others["id"] not in ids
-        assert ids <= exp_ids
+        only = {e["id"] for e in api.items(f"/ideas/{idea['id']}/evidence?scope=idea_only")}
+        assert only == {own["id"]}
     api.get(f"/explorations/{UNKNOWN_ID}/evidence", expect=404)
     api.get(f"/ideas/{UNKNOWN_ID}/evidence", expect=404)
 
@@ -379,7 +381,14 @@ def test_links_reference_claims_and_survive_later_retraction(api: Api) -> None:
 
     api.post(f"/evidence/{ev['id']}/retract", {"reason": "誤り"}, expect=200)
     after = api.get(f"/analyses/{analysis_id}")
-    assert after["evidence_links"] == before["evidence_links"]  # 過去の分析の根拠は追跡可能
+
+    def identity(links: list[dict[str, str]]) -> list[tuple[str, ...]]:
+        return [(k["claim_id"], k["evidence_id"], k["relation"]) for k in links]
+
+    # 過去の分析の根拠リンクは書き換えない（E-01）。参照先の現在の状態だけが変わる。
+    assert identity(after["evidence_links"]) == identity(before["evidence_links"])
+    assert {link["evidence_status"] for link in before["evidence_links"]} == {"active"}
+    assert {link["evidence_status"] for link in after["evidence_links"]} == {"retracted"}
     assert after["body"] == before["body"]
 
 

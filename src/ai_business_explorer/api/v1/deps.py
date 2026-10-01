@@ -10,14 +10,21 @@
 """
 
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, Query, Request
 from sqlalchemy.orm import Session
 
 from ai_business_explorer.agents.registry import AgentRegistry
 from ai_business_explorer.application.actors import ActorService, Principal
+from ai_business_explorer.application.pagination import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    PageRequest,
+    SortOrder,
+)
 from ai_business_explorer.config import Settings
 from ai_business_explorer.domain.enums import OrganizationRole
 from ai_business_explorer.infrastructure.db.models import Actor
@@ -92,6 +99,25 @@ def require_reviewer(principal: PrincipalDep, _: SessionDep) -> Actor:
 def require_admin(principal: PrincipalDep, _: SessionDep) -> Actor:
     return _require(principal, OrganizationRole.ADMIN)
 
+
+def get_page_request(
+    limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
+    cursor: Annotated[str | None, Query(description="前の応答の next_cursor")] = None,
+    order: SortOrder = SortOrder.ASC,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+) -> PageRequest:
+    """一覧の共通パラメータ（第2回仕様 15章）。"""
+    return PageRequest(
+        limit=limit,
+        cursor=cursor,
+        order=order,
+        created_after=created_after,
+        created_before=created_before,
+    )
+
+
+PageDep = Annotated[PageRequest, Depends(get_page_request)]
 
 MemberDep = Annotated[Actor, Depends(require_member)]
 ReviewerDep = Annotated[Actor, Depends(require_reviewer)]

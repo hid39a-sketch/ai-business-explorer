@@ -125,6 +125,7 @@ class AIEmployee(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, B
 
     __tablename__ = "ai_employees"
     __table_args__ = (
+        Index("ix_ai_employees_list", "organization_id", "created_at", "id"),
         CheckConstraint(f"status IN ({sql_in(AIEmployeeStatus)})", name="status"),
         CheckConstraint("version >= 1", name="version_positive"),
         UniqueConstraint("organization_id", "key", name="uq_ai_employees_organization_id_key"),
@@ -193,6 +194,7 @@ class StageAssignment(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMix
 class Exploration(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base):
     __tablename__ = "explorations"
     __table_args__ = (
+        Index("ix_explorations_list", "organization_id", "created_at", "id"),
         CheckConstraint(f"status IN ({sql_in(ExplorationStatus)})", name="status"),
         UniqueConstraint("id", "organization_id", name="uq_explorations_id_organization_id"),
     )
@@ -209,6 +211,7 @@ class Idea(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base):
 
     __tablename__ = "ideas"
     __table_args__ = (
+        Index("ix_ideas_list_exploration", "organization_id", "exploration_id", "created_at", "id"),
         UniqueConstraint("id", "organization_id", name="uq_ideas_id_organization_id"),
         ForeignKeyConstraint(
             ["exploration_id", "organization_id"],
@@ -257,6 +260,14 @@ class StageRun(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
 
     __tablename__ = "stage_runs"
     __table_args__ = (
+        Index(
+            "ix_stage_runs_list_exploration",
+            "organization_id",
+            "exploration_id",
+            "started_at",
+            "id",
+        ),
+        Index("ix_stage_runs_list_idea", "organization_id", "idea_id", "started_at", "id"),
         UniqueConstraint("id", "organization_id", name="uq_stage_runs_id_organization_id"),
         ForeignKeyConstraint(
             ["exploration_id", "organization_id"],
@@ -373,6 +384,10 @@ class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
 
     __tablename__ = "analyses"
     __table_args__ = (
+        Index(
+            "ix_analyses_list_exploration", "organization_id", "exploration_id", "created_at", "id"
+        ),
+        Index("ix_analyses_list_idea", "organization_id", "idea_id", "created_at", "id"),
         UniqueConstraint("id", "organization_id", name="uq_analyses_id_organization_id"),
         ForeignKeyConstraint(
             ["exploration_id", "organization_id"],
@@ -399,11 +414,44 @@ class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
 
 
 class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
-    """根拠・出典。外部情報または人間の入力のみ。不変（訂正は撤回＋新規登録）。"""
+    """根拠・出典。外部情報または人間の入力のみ。不変（訂正は撤回＋新規登録）。
+
+    状態（第2回 E-01。保存せず算出する）：
+    - superseded：更新版（supersedes_evidence_id でこの行を指す Evidence）がある
+    - retracted：人間が理由を付けて撤回した
+    - purged：本文（quote・summary）を消去した（admin のみ。行・ID・来歴・根拠リンクは残る）
+    """
 
     __tablename__ = "evidence"
     __table_args__ = (
         UniqueConstraint("id", "organization_id", name="uq_evidence_id_organization_id"),
+        UniqueConstraint("supersedes_evidence_id", name="uq_evidence_supersedes_evidence_id"),
+        ForeignKeyConstraint(
+            ["supersedes_evidence_id", "organization_id"],
+            ["evidence.id", "evidence.organization_id"],
+            name="fk_evidence_supersedes_org",
+        ),
+        ForeignKeyConstraint(
+            ["purged_by_actor_id", "purged_by_actor_type"],
+            ["actors.id", "actors.actor_type"],
+            name="fk_evidence_purged_by_human",
+        ),
+        CheckConstraint(
+            f"purged_by_actor_type IS NULL OR purged_by_actor_type = '{HUMAN}'",
+            name="purged_by_human",
+        ),
+        CheckConstraint(
+            "(content_purged_at IS NULL) = (purge_reason IS NULL) "
+            "AND (content_purged_at IS NULL) = (purged_by_actor_id IS NULL) "
+            "AND (content_purged_at IS NULL) = (purged_by_actor_type IS NULL)",
+            name="purge_record",
+        ),
+        CheckConstraint("supersedes_evidence_id <> id", name="not_self_superseding"),
+        Index(
+            "ix_evidence_list_exploration", "organization_id", "exploration_id", "created_at", "id"
+        ),
+        Index("ix_evidence_list_idea", "organization_id", "idea_id", "created_at", "id"),
+        Index("ix_evidence_source_key", "organization_id", "exploration_id", "source_key"),
         ForeignKeyConstraint(
             ["exploration_id", "organization_id"],
             ["explorations.id", "explorations.organization_id"],
@@ -430,6 +478,14 @@ class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
     created_by_actor_id: Mapped[UUID] = mapped_column(ForeignKey("actors.id"))
     retracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retraction_reason: Mapped[str | None] = mapped_column(Text)
+    # 出典の同一性（Web は正規化した URL）と、取得した本文のハッシュ（第2回 4章）
+    source_key: Mapped[str | None] = mapped_column(String(2000))
+    snapshot_hash: Mapped[str | None] = mapped_column(String(64))
+    supersedes_evidence_id: Mapped[UUID | None] = mapped_column()
+    content_purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_reason: Mapped[str | None] = mapped_column(Text)
+    purged_by_actor_id: Mapped[UUID | None] = mapped_column()
+    purged_by_actor_type: Mapped[str | None] = mapped_column(String(16))
 
 
 class AnalysisEvidenceLink(Base):
@@ -511,6 +567,7 @@ class HumanReview(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, 
 
     __tablename__ = "human_reviews"
     __table_args__ = (
+        Index("ix_human_reviews_list", "organization_id", "analysis_id", "created_at", "id"),
         ForeignKeyConstraint(
             ["analysis_id", "organization_id"],
             ["analyses.id", "analyses.organization_id"],
@@ -547,6 +604,7 @@ class HumanDecision(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin
 
     __tablename__ = "human_decisions"
     __table_args__ = (
+        Index("ix_human_decisions_list", "organization_id", "idea_id", "created_at", "id"),
         ForeignKeyConstraint(
             ["idea_id", "organization_id"],
             ["ideas.id", "ideas.organization_id"],

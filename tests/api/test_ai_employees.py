@@ -25,7 +25,7 @@ def test_register_get_and_list_ai_employee(api: Api) -> None:
     assert created["implementation_key"] is None
     fetched = api.get(f"/ai-employees/{created['id']}")
     assert fetched["name"] == "CompetitorResearcher"
-    keys = {e["key"] for e in api.get("/ai-employees")}
+    keys = {e["key"] for e in api.items("/ai-employees")}
     assert {"idea_generator", "market_researcher", "competitor_researcher"} <= keys
 
 
@@ -39,7 +39,7 @@ def test_update_ai_employee_increments_version_and_is_audited(api: Api) -> None:
 
 
 def test_seeded_fake_employees_are_active_with_formats(api: Api) -> None:
-    employees = {e["key"]: e for e in api.get("/ai-employees")}
+    employees = {e["key"]: e for e in api.items("/ai-employees")}
     ig = employees["idea_generator"]
     assert ig["status"] == "active"
     assert ig["prompt_key"] == "idea_generator"
@@ -86,7 +86,7 @@ def test_writes_require_human_actor(api: Api, system_api: Api) -> None:
 def test_new_employee_can_be_added_and_executed_for_a_new_stage_definition(api: Api) -> None:
     """将来の追加手順の確認: 実装を持つ AI社員を API から追加して実行できる。"""
     exp = api.exploration()
-    ig = next(e for e in api.get("/ai-employees") if e["key"] == "idea_generator")
+    ig = next(e for e in api.items("/ai-employees") if e["key"] == "idea_generator")
     api.patch(f"/ai-employees/{ig['id']}", {"status": "inactive"})
     second = api.post(
         "/ai-employees",

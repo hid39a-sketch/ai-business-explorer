@@ -122,6 +122,20 @@ class Api:
         assert res.status_code == expect, res.text
         return res.json()
 
+    def items(self, path: str, expect: int = 200) -> list[Any]:
+        """一覧 API（{items, next_cursor, has_more}）の全ページの items を返す。"""
+        collected: list[Any] = []
+        cursor: str | None = None
+        while True:
+            sep = "&" if "?" in path else "?"
+            url = path if cursor is None else f"{path}{sep}cursor={cursor}"
+            page = self.get(url, expect=expect)
+            assert set(page) == {"items", "next_cursor", "has_more"}, page
+            collected.extend(page["items"])
+            if not page["has_more"]:
+                return collected
+            cursor = page["next_cursor"]
+
     def exploration(self, theme: str = "AIを活用した新規事業を探索する") -> Any:
         return self.post("/explorations", {"title": "探索案件A", "theme": theme})
 

@@ -89,7 +89,7 @@ def test_human_review_is_separate_and_updates_review_status_only(api: Api) -> No
     assert after["human_reviews"][0]["corrections"] == {"i1": "市場規模は別資料で確認する"}
     api.post(f"/analyses/{analysis['id']}/human-reviews", {"decision": "approve"})
     assert api.get(f"/analyses/{analysis['id']}")["review_status"] == "approved"
-    assert len(api.get(f"/analyses/{analysis['id']}/human-reviews")) == 2
+    assert len(api.items(f"/analyses/{analysis['id']}/human-reviews")) == 2
 
 
 def test_idea_generation_analysis_can_be_reviewed(api: Api) -> None:
@@ -129,7 +129,7 @@ def test_human_decision(api: Api) -> None:
     )
     assert decision["decision"] == "hold"
     assert decision["based_on_review_ids"] == [review["id"]]
-    assert len(api.get(f"/ideas/{idea['id']}/human-decisions")) == 1
+    assert len(api.items(f"/ideas/{idea['id']}/human-decisions")) == 1
     api.post(
         f"/ideas/{idea['id']}/human-decisions",
         {"decision": "approve", "rationale": "x"},
@@ -150,7 +150,7 @@ def test_human_decision_requires_adopted_idea(api: Api) -> None:
                 {"decision": decision, "rationale": "判断"},
                 expect=409,
             )
-        assert api.get(f"/ideas/{idea['id']}/human-decisions") == []
+        assert api.items(f"/ideas/{idea['id']}/human-decisions") == []
 
     # AI 生成の candidate も同様に、採用されるまで判断を記録できない
     run = api.post(f"/explorations/{exp['id']}/stage-runs", {})

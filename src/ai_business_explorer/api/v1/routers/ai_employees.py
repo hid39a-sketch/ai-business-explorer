@@ -2,8 +2,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from ai_business_explorer.api.v1.deps import AdminDep, AgentRegistryDep, SessionDep
-from ai_business_explorer.api.v1.schemas import AIEmployeeOut
+from ai_business_explorer.api.v1.deps import AdminDep, AgentRegistryDep, PageDep, SessionDep
+from ai_business_explorer.api.v1.schemas import AIEmployeeOut, PageOut
 from ai_business_explorer.application.ai_employees import AIEmployeeService
 from ai_business_explorer.application.commands import AIEmployeeCreate, AIEmployeeUpdate
 
@@ -22,11 +22,11 @@ def create_ai_employee(
     return AIEmployeeService(session, registry).create(actor, body)
 
 
-@router.get("", response_model=list[AIEmployeeOut])
+@router.get("", response_model=PageOut[AIEmployeeOut])
 def list_ai_employees(
-    session: SessionDep, registry: AgentRegistryDep, stage_key: str | None = None
+    session: SessionDep, registry: AgentRegistryDep, page: PageDep, stage_key: str | None = None
 ) -> object:
-    return AIEmployeeService(session, registry).list(stage_key)
+    return AIEmployeeService(session, registry).list(page, stage_key)
 
 
 @router.get("/{employee_id}", response_model=AIEmployeeOut)

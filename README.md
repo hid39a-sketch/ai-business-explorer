@@ -51,6 +51,8 @@ Docker を使わない場合は、PostgreSQL 16 を用意して `DATABASE_URL` �
 6. `POST /api/v1/analyses/{id}/human-reviews` で人間がレビューする
 7. `POST /api/v1/ideas/{id}/human-decisions` で人間が最終判断（go / no_go / hold / pivot）を記録する（`adopted` の Idea のみ）
 
+一覧 API は `{"items": [...], "next_cursor": ..., "has_more": ...}` を返します（`limit` は既定 50・最大 200、続きは `cursor` に前の応答の `next_cursor` を渡す）。Evidence の一覧は既定で active（有効）なものだけを返し、`status`（`active` / `superseded` / `retracted` / `purged`、繰り返し指定可）で状態を指定できます。日時はすべて UTC（末尾 `Z`）です。
+
 > ⚠️ `X-Actor-Id` は認証ではありません。ヘッダの値をそのまま信頼する簡易方式で、第2回も同じです。ヘッダを偽ればどのロールでも操作できるため、ロールは誤操作の防止にしかならず、不正は防げません。外部に公開する環境では使えません。
 
 ## 第1回で実装していないもの

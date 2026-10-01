@@ -1,9 +1,9 @@
-from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.domain.enums import ActorType, OrganizationRole
 from ai_business_explorer.domain.errors import (
     AuthenticationRequiredError,
@@ -35,6 +35,7 @@ class Principal:
 
 class ActorService:
     def __init__(self, session: Session) -> None:
+        self.session = session
         self.actors = ActorRepository(session)
         self.memberships = OrganizationMembershipRepository(session)
 
@@ -74,5 +75,11 @@ class ActorService:
             raise NotFoundError(f"actors not found: {actor_id}")
         return self.actors.get_or_raise(actor_id)
 
-    def list_in_organization(self, organization_id: UUID) -> Sequence[Actor]:
-        return self.actors.list_in_organization(organization_id)
+    def list_in_organization(self, organization_id: UUID, page: PageRequest) -> Page[Actor]:
+        return paginate(
+            self.session,
+            self.actors.select_in_organization(organization_id),
+            sort_column=Actor.created_at,
+            id_column=Actor.id,
+            page=page,
+        )

@@ -28,11 +28,11 @@ def test_rerun_supersedes_previous_attempt_and_keeps_history(api: Api) -> None:
     assert second["trigger"] == "rerun"
     assert second["attempt_no"] == 2
     assert second["rerun_of_id"] == first["id"]
-    runs = api.get(f"/ideas/{idea['id']}/stage-runs")
+    runs = api.items(f"/ideas/{idea['id']}/stage-runs")
     assert len(runs) == 2
     old = next(r for r in runs if r["id"] == first["id"])
     assert old["superseded_at"] is not None
-    analyses = api.get(f"/ideas/{idea['id']}/analyses")
+    analyses = api.items(f"/ideas/{idea['id']}/analyses")
     assert [a["version_no"] for a in analyses] == [1, 2]
     assert analyses[1]["supersedes_id"] == analyses[0]["id"]
     # 古い試行を指定した再実行は拒否
@@ -115,7 +115,7 @@ def test_send_back_supersedes_target_and_later_stages(client: TestClient, api: A
     assert sent["reason"] == "根拠不足のため市場調査をやり直す"
     assert sent["attempt_no"] == 2
 
-    runs = {r["id"]: r for r in api.get(f"/ideas/{idea['id']}/stage-runs")}
+    runs = {r["id"]: r for r in api.items(f"/ideas/{idea['id']}/stage-runs")}
     assert runs[mr["id"]]["superseded_at"] is not None
     assert runs[cr["id"]]["superseded_at"] is not None  # 後続ステージも無効化
     assert runs[sent["id"]]["superseded_at"] is None

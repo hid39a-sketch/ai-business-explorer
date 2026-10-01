@@ -8,7 +8,7 @@ from ai_business_explorer.api.v1.deps import (
     SettingsDep,
     ToolRegistryDep,
 )
-from ai_business_explorer.api.v1.schemas import ExecutionOut, StageOut, StageRunDetailOut
+from ai_business_explorer.api.v1.schemas import ExecutionOut, PageOut, StageOut, StageRunDetailOut
 from ai_business_explorer.application.stage_runs import StageRunService
 from ai_business_explorer.domain.stages import STAGES
 from ai_business_explorer.infrastructure.db.models import StageRun
@@ -22,9 +22,10 @@ def stage_run_detail(service: StageRunService, stage_run: StageRun) -> StageRunD
     return out
 
 
-@router.get("/stages", response_model=list[StageOut])
+@router.get("/stages", response_model=PageOut[StageOut])
 def list_stages() -> object:
-    return [
+    """ステージの定義（固定の小さな一覧なので、常に1ページで返す）。"""
+    items = [
         StageOut(
             key=s.key,
             order=s.order,
@@ -34,6 +35,7 @@ def list_stages() -> object:
         )
         for s in STAGES
     ]
+    return PageOut[StageOut](items=items, next_cursor=None, has_more=False)
 
 
 @router.get("/stage-runs/{stage_run_id}", response_model=StageRunDetailOut)

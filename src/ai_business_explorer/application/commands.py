@@ -148,6 +148,10 @@ class EvidenceRetract(_Command):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class EvidencePurge(_Command):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class ExplorationStageRunCommand(_Command):
     """idea_generation ステージの実行。"""
 
