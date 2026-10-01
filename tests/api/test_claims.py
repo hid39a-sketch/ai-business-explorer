@@ -218,7 +218,7 @@ def test_claim_review_must_target_a_claim_of_the_analysis(
     first = _analysis(api, session, settings, human, ctx)
     other_claim = first["claims"][0]["id"]
     # 再実行で別の分析を作り、最初の分析の主張を指定する
-    run = api.get(f"/ideas/{ctx['idea']['id']}/stage-runs")[-1]
+    run = api.items(f"/ideas/{ctx['idea']['id']}/stage-runs")[-1]
     rerun = api.post(
         f"/ideas/{ctx['idea']['id']}/stage-runs",
         {"stage_key": "market_research", "rerun_of_id": run["id"]},

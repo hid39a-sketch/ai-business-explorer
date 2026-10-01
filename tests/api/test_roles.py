@@ -152,6 +152,12 @@ def _ops() -> list[Operation]:
             201,
         ),
         ("update ai employee", "admin", _call("patch", employee, {"description": "d"}), 200),
+        (
+            "purge evidence",
+            "admin",
+            _call("post", lambda s: f"/evidence/{s['evidence']['id']}/purge", {"reason": "r"}),
+            200,
+        ),
     ]
 
 
@@ -301,8 +307,8 @@ def test_other_organization_data_is_not_found(other_admin: Api, setup: dict[str,
         f"/ai-employees/{setup['run']['executions'][0]['ai_employee_id']}",
     ):
         other_admin.get(path, expect=404)
-    assert other_admin.get("/explorations") == []
-    assert other_admin.get("/ai-employees") == []
+    assert other_admin.items("/explorations") == []
+    assert other_admin.items("/ai-employees") == []
 
 
 def test_cannot_write_to_other_organization_data(other_admin: Api, setup: dict[str, Any]) -> None:
@@ -343,7 +349,7 @@ def test_ai_employee_key_is_unique_per_organization(
 def test_actors_are_listed_within_the_organization(
     api: Api, other_admin: Api, system_id: UUID, human_id: UUID
 ) -> None:
-    ids = {a["id"] for a in api.get("/actors")}
+    ids = {a["id"] for a in api.items("/actors")}
     assert str(human_id) in ids
     assert str(system_id) not in ids  # system actor はどの組織にも所属しない
     assert str(other_admin.h["X-Actor-Id"]) not in ids

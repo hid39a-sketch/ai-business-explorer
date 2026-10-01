@@ -1,27 +1,32 @@
 from dataclasses import asdict
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 
 from ai_business_explorer.api.v1.deps import (
     AgentRegistryDep,
     MemberDep,
+    PageDep,
     ReviewerDep,
     SessionDep,
     SettingsDep,
     ToolRegistryDep,
 )
+from ai_business_explorer.api.v1.filters import EvidenceFiltersDep, analysis_filters
+from ai_business_explorer.api.v1.routers.evidence import evidence_page
 from ai_business_explorer.api.v1.routers.stage_runs import stage_run_detail
 from ai_business_explorer.api.v1.schemas import (
     AnalysisOut,
     EvidenceOut,
     HumanDecisionOut,
     IdeaOut,
+    PageOut,
     ResearchStatusOut,
     StageRunDetailOut,
     StageRunOut,
 )
-from ai_business_explorer.application.analyses import AnalysisService
+from ai_business_explorer.application.analyses import AnalysisFilters, AnalysisService
 from ai_business_explorer.application.commands import (
     HumanDecisionCreate,
     IdeaAdoptionCommand,
@@ -33,6 +38,7 @@ from ai_business_explorer.application.evidence import EvidenceService
 from ai_business_explorer.application.ideas import IdeaService
 from ai_business_explorer.application.reviews import DecisionService
 from ai_business_explorer.application.stage_runs import StageRunService
+from ai_business_explorer.domain.evidence import EvidenceScope
 from ai_business_explorer.infrastructure.db.models import Idea
 
 router = APIRouter(prefix="/ideas", tags=["ideas"])
@@ -122,25 +128,54 @@ def send_back(
     return stage_run_detail(service, service.send_back(actor, idea_id, body))
 
 
-@router.get("/{idea_id}/stage-runs", response_model=list[StageRunOut])
+@router.get("/{idea_id}/stage-runs", response_model=PageOut[StageRunOut])
 def list_idea_stage_runs(
     idea_id: UUID,
     session: SessionDep,
     settings: SettingsDep,
     agents: AgentRegistryDep,
     tools: ToolRegistryDep,
+    page: PageDep,
 ) -> object:
-    return StageRunService(session, settings, agents, tools).list_for_idea(idea_id)
+    return StageRunService(session, settings, agents, tools).list_for_idea(idea_id, page)
 
 
-@router.get("/{idea_id}/evidence", response_model=list[EvidenceOut])
-def list_idea_evidence(idea_id: UUID, session: SessionDep) -> object:
-    return EvidenceService(session).list_for_idea(idea_id)
+@router.get(
+    "/{idea_id}/evidence",
+    response_model=PageOut[EvidenceOut],
+    summary=(
+        "Idea の Evidence 一覧（既定は案件全体の Evidence も含む with_exploration、"
+        "状態は active のみ）"
+    ),
+)
+def list_idea_evidence(
+    idea_id: UUID,
+    session: SessionDep,
+    page: PageDep,
+    filters: EvidenceFiltersDep,
+    scope: EvidenceScope = EvidenceScope.WITH_EXPLORATION,
+) -> object:
+    service = EvidenceService(session)
+    return evidence_page(
+        service,
+        service.list_for_idea(
+            idea_id,
+            page,
+            statuses=filters.statuses,
+            scope=scope,
+            source_type=filters.source_type,
+        ),
+    )
 
 
-@router.get("/{idea_id}/analyses", response_model=list[AnalysisOut])
-def list_idea_analyses(idea_id: UUID, session: SessionDep) -> object:
-    return AnalysisService(session).list_for_idea(idea_id)
+@router.get("/{idea_id}/analyses", response_model=PageOut[AnalysisOut])
+def list_idea_analyses(
+    idea_id: UUID,
+    session: SessionDep,
+    page: PageDep,
+    filters: Annotated[AnalysisFilters, Depends(analysis_filters)],
+) -> object:
+    return AnalysisService(session).list_for_idea(idea_id, page, filters)
 
 
 @router.post(
@@ -155,6 +190,6 @@ def create_human_decision(
     return DecisionService(session).create(actor, idea_id, body)
 
 
-@router.get("/{idea_id}/human-decisions", response_model=list[HumanDecisionOut])
-def list_human_decisions(idea_id: UUID, session: SessionDep) -> object:
-    return DecisionService(session).list_for_idea(idea_id)
+@router.get("/{idea_id}/human-decisions", response_model=PageOut[HumanDecisionOut])
+def list_human_decisions(idea_id: UUID, session: SessionDep, page: PageDep) -> object:
+    return DecisionService(session).list_for_idea(idea_id, page)

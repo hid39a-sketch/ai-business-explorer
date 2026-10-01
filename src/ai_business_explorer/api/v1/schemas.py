@@ -1,21 +1,39 @@
-"""API レスポンスのスキーマ。DB モデルとは分離する。"""
+"""API レスポンスのスキーマ。DB モデルとは分離する。
 
-from datetime import datetime
-from typing import Any
+日時はすべて UTC（末尾 Z）で返す（第2回仕様 15章 Q1）。
+"""
+
+from datetime import UTC, datetime
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
+
+
+def _utc_z(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+UTCDateTime = Annotated[datetime, PlainSerializer(_utc_z, return_type=str)]
+
+
+class PageOut[T](BaseModel):
+    """一覧の応答（カーソル方式）。総件数は返さない。"""
+
+    items: list[T]
+    next_cursor: str | None
+    has_more: bool
 
 
 class _Out(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class ActorOut(_Out):
     id: UUID
     actor_type: str
     display_name: str
-    created_at: datetime
+    created_at: UTCDateTime
 
 
 class AIEmployeeOut(_Out):
@@ -36,8 +54,8 @@ class AIEmployeeOut(_Out):
     prompt_version: str | None
     status: str
     version: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
 
 class ExplorationOut(_Out):
@@ -48,8 +66,8 @@ class ExplorationOut(_Out):
     description: str | None
     status: str
     created_by_actor_id: UUID
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
 
 class ResearchStatusOut(BaseModel):
@@ -84,8 +102,8 @@ class IdeaOut(_Out):
     adoption_status: str
     current_stage_key: str | None
     created_by_actor_id: UUID | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
     research_status: ResearchStatusOut | None = None
 
 
@@ -99,14 +117,37 @@ class EvidenceOut(_Out):
     url: str | None
     quote: str | None
     summary: str | None
-    published_at: datetime | None
-    retrieved_at: datetime | None
+    published_at: UTCDateTime | None
+    retrieved_at: UTCDateTime | None
     content_hash: str
     metadata: dict[str, Any] = Field(validation_alias="metadata_")
     created_by_actor_id: UUID
-    retracted_at: datetime | None
+    retracted_at: UTCDateTime | None
     retraction_reason: str | None
-    created_at: datetime
+    source_key: str | None
+    snapshot_hash: str | None
+    supersedes_evidence_id: UUID | None
+    content_purged_at: UTCDateTime | None
+    purge_reason: str | None
+    purged_by_actor_id: UUID | None
+    created_at: UTCDateTime
+    # 状態（取得時に算出。優先順位 purged > retracted > superseded > active）と、元の各状態
+    evidence_status: str = "active"
+    is_retracted: bool = False
+    is_superseded: bool = False
+    is_purged: bool = False
+    superseded_by_id: UUID | None = None
+
+
+class EvidenceWarningOut(BaseModel):
+    code: str  # duplicate
+    evidence_id: UUID
+
+
+class EvidenceCreatedOut(EvidenceOut):
+    """登録の応答。重複は拒否せず warnings で知らせる（Q4）。"""
+
+    warnings: list[EvidenceWarningOut] = Field(default_factory=list)
 
 
 class ExecutionOut(_Out):
@@ -131,9 +172,9 @@ class ExecutionOut(_Out):
     error_message: str | None
     error_detail: dict[str, Any] | None
     usage: dict[str, Any] | None
-    started_at: datetime
-    finished_at: datetime | None
-    created_at: datetime
+    started_at: UTCDateTime
+    finished_at: UTCDateTime | None
+    created_at: UTCDateTime
 
 
 class StageRunOut(_Out):
@@ -151,9 +192,9 @@ class StageRunOut(_Out):
     triggered_by_actor_id: UUID
     status: str
     input_snapshot: dict[str, Any]
-    superseded_at: datetime | None
-    started_at: datetime
-    finished_at: datetime | None
+    superseded_at: UTCDateTime | None
+    started_at: UTCDateTime
+    finished_at: UTCDateTime | None
 
 
 class StageRunDetailOut(StageRunOut):
@@ -174,7 +215,7 @@ class AnalysisOut(_Out):
     summary: str
     body: dict[str, Any]
     review_status: str
-    created_at: datetime
+    created_at: UTCDateTime
 
 
 class EvidenceLinkOut(BaseModel):
@@ -184,6 +225,12 @@ class EvidenceLinkOut(BaseModel):
     claim_ref: str
     evidence_id: UUID
     relation: str
+    # 参照先 Evidence の現在の状態（リンク自体は書き換えない。E-01）
+    evidence_status: str
+    evidence_is_retracted: bool
+    evidence_is_superseded: bool
+    evidence_is_purged: bool
+    evidence_superseded_by_id: UUID | None
 
 
 class HumanReviewOut(_Out):
@@ -197,7 +244,7 @@ class HumanReviewOut(_Out):
     decision: str
     comment: str | None
     corrections: dict[str, Any] | None
-    created_at: datetime
+    created_at: UTCDateTime
 
 
 class ClaimOut(BaseModel):
@@ -229,7 +276,7 @@ class HumanDecisionOut(_Out):
     decision: str
     rationale: str
     based_on_review_ids: list[UUID]
-    created_at: datetime
+    created_at: UTCDateTime
 
 
 class StageOut(BaseModel):

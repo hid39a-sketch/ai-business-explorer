@@ -42,6 +42,7 @@ from ai_business_explorer.application.common import (
     to_jsonable,
     utcnow,
 )
+from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.config import Settings
 from ai_business_explorer.domain.enums import (
     AdoptionStatus,
@@ -54,6 +55,7 @@ from ai_business_explorer.domain.enums import (
     StageRunTrigger,
 )
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
+from ai_business_explorer.domain.evidence import EvidenceStatus
 from ai_business_explorer.domain.stages import (
     IDEA_GENERATION,
     STAGES,
@@ -229,13 +231,24 @@ class StageRunService:
     def get_execution(self, execution_id: UUID) -> Execution:
         return self.executions.get_or_raise(execution_id)
 
-    def list_for_exploration(self, exploration_id: UUID) -> list[StageRun]:
+    def list_for_exploration(self, exploration_id: UUID, page: PageRequest) -> Page[StageRun]:
         self.explorations.get_or_raise(exploration_id)
-        return list(self.stage_runs.list_for(exploration_id, None))
+        return self._page(
+            page, StageRun.exploration_id == exploration_id, StageRun.idea_id.is_(None)
+        )
 
-    def list_for_idea(self, idea_id: UUID) -> list[StageRun]:
+    def list_for_idea(self, idea_id: UUID, page: PageRequest) -> Page[StageRun]:
         idea = self.ideas.get_or_raise(idea_id)
-        return list(self.stage_runs.list_for(idea.exploration_id, idea.id))
+        return self._page(page, StageRun.idea_id == idea.id)
+
+    def _page(self, page: PageRequest, *criteria: Any) -> Page[StageRun]:
+        return paginate(
+            self.session,
+            self.stage_runs.select(*criteria),
+            sort_column=StageRun.started_at,
+            id_column=StageRun.id,
+            page=page,
+        )
 
     # ------------------------------------------------------------------ 事前検証
 
@@ -381,6 +394,10 @@ class StageRunService:
             self._supersede_from(plan.exploration.id, idea_id, plan.stage, now)
         input_snapshot = {
             "evidence_ids": [str(e.id) for e in evidence],
+            # 渡した Evidence と、その時点の状態（E-01。入力は active だけ）
+            "evidence": [
+                {"id": str(e.id), "status": EvidenceStatus.ACTIVE.value} for e in evidence
+            ],
             "analysis_ids": [str(a.id) for a in prior],
             "research_question": plan.research_question,
         }
@@ -462,9 +479,11 @@ class StageRunService:
         self.session.flush()
 
     def _evidence_for(self, plan: _Plan) -> list[Evidence]:
+        # 通常の新規Analysisに渡すのは active の Evidence だけ（E-01）。
+        # superseded（更新版がある）・retracted・purged は渡さない。
         criteria = [
             Evidence.exploration_id == plan.exploration.id,
-            Evidence.retracted_at.is_(None),
+            self.evidence.status_criteria([EvidenceStatus.ACTIVE]),
         ]
         if plan.idea is None:
             criteria.append(Evidence.idea_id.is_(None))

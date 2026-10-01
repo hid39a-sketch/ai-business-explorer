@@ -1,14 +1,18 @@
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 
 from ai_business_explorer.api.v1.deps import (
     AgentRegistryDep,
     MemberDep,
+    PageDep,
     SessionDep,
     SettingsDep,
     ToolRegistryDep,
 )
+from ai_business_explorer.api.v1.filters import EvidenceFiltersDep, analysis_filters
+from ai_business_explorer.api.v1.routers.evidence import evidence_page
 from ai_business_explorer.api.v1.routers.ideas import idea_out
 from ai_business_explorer.api.v1.routers.stage_runs import stage_run_detail
 from ai_business_explorer.api.v1.schemas import (
@@ -16,10 +20,11 @@ from ai_business_explorer.api.v1.schemas import (
     EvidenceOut,
     ExplorationOut,
     IdeaOut,
+    PageOut,
     StageRunDetailOut,
     StageRunOut,
 )
-from ai_business_explorer.application.analyses import AnalysisService
+from ai_business_explorer.application.analyses import AnalysisFilters, AnalysisService
 from ai_business_explorer.application.commands import (
     ExplorationCreate,
     ExplorationStageRunCommand,
@@ -39,9 +44,9 @@ def create_exploration(body: ExplorationCreate, actor: MemberDep, session: Sessi
     return ExplorationService(session).create(actor, body)
 
 
-@router.get("", response_model=list[ExplorationOut])
-def list_explorations(session: SessionDep) -> object:
-    return ExplorationService(session).list()
+@router.get("", response_model=PageOut[ExplorationOut])
+def list_explorations(session: SessionDep, page: PageDep) -> object:
+    return ExplorationService(session).list(page)
 
 
 @router.get("/{exploration_id}", response_model=ExplorationOut)
@@ -64,10 +69,10 @@ def create_idea(
     return idea_out(service, service.create(actor, exploration_id, body))
 
 
-@router.get("/{exploration_id}/ideas", response_model=list[IdeaOut])
-def list_ideas(exploration_id: UUID, session: SessionDep) -> object:
+@router.get("/{exploration_id}/ideas", response_model=PageOut[IdeaOut])
+def list_ideas(exploration_id: UUID, session: SessionDep, page: PageDep) -> object:
     service = IdeaService(session)
-    return [idea_out(service, i) for i in service.list_for_exploration(exploration_id)]
+    return service.list_for_exploration(exploration_id, page).map(lambda i: idea_out(service, i))
 
 
 @router.post(
@@ -89,22 +94,41 @@ def run_idea_generation(
     return stage_run_detail(service, service.run_exploration_stage(actor, exploration_id, body))
 
 
-@router.get("/{exploration_id}/stage-runs", response_model=list[StageRunOut])
+@router.get("/{exploration_id}/stage-runs", response_model=PageOut[StageRunOut])
 def list_exploration_stage_runs(
     exploration_id: UUID,
     session: SessionDep,
     settings: SettingsDep,
     agents: AgentRegistryDep,
     tools: ToolRegistryDep,
+    page: PageDep,
 ) -> object:
-    return StageRunService(session, settings, agents, tools).list_for_exploration(exploration_id)
+    service = StageRunService(session, settings, agents, tools)
+    return service.list_for_exploration(exploration_id, page)
 
 
-@router.get("/{exploration_id}/evidence", response_model=list[EvidenceOut])
-def list_exploration_evidence(exploration_id: UUID, session: SessionDep) -> object:
-    return EvidenceService(session).list_for_exploration(exploration_id)
+@router.get(
+    "/{exploration_id}/evidence",
+    response_model=PageOut[EvidenceOut],
+    summary="探索案件の Evidence 一覧（既定は active のみ。status で状態を指定できる）",
+)
+def list_exploration_evidence(
+    exploration_id: UUID, session: SessionDep, page: PageDep, filters: EvidenceFiltersDep
+) -> object:
+    service = EvidenceService(session)
+    return evidence_page(
+        service,
+        service.list_for_exploration(
+            exploration_id, page, statuses=filters.statuses, source_type=filters.source_type
+        ),
+    )
 
 
-@router.get("/{exploration_id}/analyses", response_model=list[AnalysisOut])
-def list_exploration_analyses(exploration_id: UUID, session: SessionDep) -> object:
-    return AnalysisService(session).list_for_exploration(exploration_id)
+@router.get("/{exploration_id}/analyses", response_model=PageOut[AnalysisOut])
+def list_exploration_analyses(
+    exploration_id: UUID,
+    session: SessionDep,
+    page: PageDep,
+    filters: Annotated[AnalysisFilters, Depends(analysis_filters)],
+) -> object:
+    return AnalysisService(session).list_for_exploration(exploration_id, page, filters)

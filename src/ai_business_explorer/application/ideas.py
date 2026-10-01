@@ -1,6 +1,5 @@
 """Idea の登録・更新・採否。採否と詳細項目の更新は人間のみ。"""
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -8,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ai_business_explorer.application.commands import IdeaAdoptionCommand, IdeaCreate, IdeaUpdate
 from ai_business_explorer.application.common import record_audit, require_human, snapshot
+from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.domain.enums import AdoptionStatus, OriginType
 from ai_business_explorer.domain.errors import InvalidStateError
 from ai_business_explorer.infrastructure.db.models import Actor, Idea
@@ -64,9 +64,15 @@ class IdeaService:
     def get(self, idea_id: UUID) -> Idea:
         return self.ideas.get_or_raise(idea_id)
 
-    def list_for_exploration(self, exploration_id: UUID) -> Sequence[Idea]:
+    def list_for_exploration(self, exploration_id: UUID, page: PageRequest) -> Page[Idea]:
         self.explorations.get_or_raise(exploration_id)
-        return self.ideas.list_where(Idea.exploration_id == exploration_id)
+        return paginate(
+            self.session,
+            self.ideas.select(Idea.exploration_id == exploration_id),
+            sort_column=Idea.created_at,
+            id_column=Idea.id,
+            page=page,
+        )
 
     def update(self, actor: Actor, idea_id: UUID, cmd: IdeaUpdate) -> Idea:
         require_human(actor, "update ideas")

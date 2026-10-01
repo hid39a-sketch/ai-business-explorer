@@ -1,12 +1,12 @@
 """Human Review と Human Decision。どちらも人間のみ・追記のみ。AI社員からの経路はない。"""
 
-from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from ai_business_explorer.application.commands import HumanDecisionCreate, HumanReviewCreate
 from ai_business_explorer.application.common import record_audit, require_human, to_jsonable
+from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.domain.enums import REVIEW_STATUS_BY_DECISION, AdoptionStatus
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
 from ai_business_explorer.infrastructure.db.models import Actor, HumanDecision, HumanReview
@@ -80,9 +80,15 @@ class ReviewService:
         self.session.commit()
         return review
 
-    def list_for_analysis(self, analysis_id: UUID) -> Sequence[HumanReview]:
+    def list_for_analysis(self, analysis_id: UUID, page: PageRequest) -> Page[HumanReview]:
         self.analyses.get_or_raise(analysis_id)
-        return self.reviews.list_where(HumanReview.analysis_id == analysis_id)
+        return paginate(
+            self.session,
+            self.reviews.select(HumanReview.analysis_id == analysis_id),
+            sort_column=HumanReview.created_at,
+            id_column=HumanReview.id,
+            page=page,
+        )
 
 
 class DecisionService:
@@ -131,6 +137,12 @@ class DecisionService:
         self.session.commit()
         return decision
 
-    def list_for_idea(self, idea_id: UUID) -> Sequence[HumanDecision]:
+    def list_for_idea(self, idea_id: UUID, page: PageRequest) -> Page[HumanDecision]:
         self.ideas.get_or_raise(idea_id)
-        return self.decisions.list_where(HumanDecision.idea_id == idea_id)
+        return paginate(
+            self.session,
+            self.decisions.select(HumanDecision.idea_id == idea_id),
+            sort_column=HumanDecision.created_at,
+            id_column=HumanDecision.id,
+            page=page,
+        )

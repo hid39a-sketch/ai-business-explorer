@@ -1,4 +1,3 @@
-from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -10,6 +9,7 @@ from ai_business_explorer.application.common import (
     require_human,
     snapshot,
 )
+from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.infrastructure.db.models import Actor, Exploration
 from ai_business_explorer.infrastructure.db.repositories import ExplorationRepository
 
@@ -45,8 +45,14 @@ class ExplorationService:
     def get(self, exploration_id: UUID) -> Exploration:
         return self.explorations.get_or_raise(exploration_id)
 
-    def list(self) -> Sequence[Exploration]:
-        return self.explorations.list_where()
+    def list(self, page: PageRequest) -> Page[Exploration]:
+        return paginate(
+            self.session,
+            self.explorations.select(),
+            sort_column=Exploration.created_at,
+            id_column=Exploration.id,
+            page=page,
+        )
 
     def update(self, actor: Actor, exploration_id: UUID, cmd: ExplorationUpdate) -> Exploration:
         require_human(actor, "update explorations")

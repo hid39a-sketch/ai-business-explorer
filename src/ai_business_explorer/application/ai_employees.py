@@ -1,6 +1,5 @@
 """AI社員の登録・取得・更新。DB の定義が正本で、implementation_key でコード実装に対応付ける。"""
 
-from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -13,6 +12,7 @@ from ai_business_explorer.application.common import (
     require_human,
     snapshot,
 )
+from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
 from ai_business_explorer.domain.stages import get_stage
 from ai_business_explorer.infrastructure.db.models import Actor, AIEmployee
@@ -73,10 +73,15 @@ class AIEmployeeService:
     def get(self, employee_id: UUID) -> AIEmployee:
         return self.employees.get_or_raise(employee_id)
 
-    def list(self, stage_key: str | None = None) -> Sequence[AIEmployee]:
-        if stage_key is None:
-            return self.employees.list_where()
-        return self.employees.list_where(AIEmployee.stage_key == stage_key)
+    def list(self, page: PageRequest, stage_key: str | None = None) -> Page[AIEmployee]:
+        criteria = [] if stage_key is None else [AIEmployee.stage_key == stage_key]
+        return paginate(
+            self.session,
+            self.employees.select(*criteria),
+            sort_column=AIEmployee.created_at,
+            id_column=AIEmployee.id,
+            page=page,
+        )
 
     def update(self, actor: Actor, employee_id: UUID, cmd: AIEmployeeUpdate) -> AIEmployee:
         require_human(actor, "update AI employees")
