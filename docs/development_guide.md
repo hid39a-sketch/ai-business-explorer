@@ -42,6 +42,20 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 
 ローカルで試す場合は `LLM_SMOKE_CONFIRM=yes LLM_API_KEY=... uv run python -m ai_business_explorer.llm_smoke`（`APP_ENV=test` では動かない）。
 
+## Prompt の版の切り替え（既存の DB）
+
+seed は AI社員がないときだけ作るので、Prompt の新しい版（例：market_researcher の v2）を seed に入れても、既存の DB の AI社員は書き換わりません。既存の DB で切り替えるときは、admin が API で更新します（migration は使わない）。
+
+```bash
+curl -X PATCH http://localhost:8000/api/v1/ai-employees/<market_researcher の id> \
+  -H "X-Actor-Id: <admin の actor id>" -H "Content-Type: application/json" \
+  -d '{"prompt_version": "v2"}'
+```
+
+- Prompt のファイル（`prompts/<key>/<version>.md`）がなければ 422 で拒否されます。
+- AI社員の版（`version`）が1つ上がり、変更前後が監査ログに残ります。過去の実行は、実行ごとに記録した `prompt_version` と `prompt_hash` で追跡できます。
+- LLM に送る出力スキーマは実行のたびにコードから作るので（`output_schema_for`）、AI社員に保存されている `output_format` が古くても、実行には影響しません。`output_format` は作成時の記録で、自動では作り直されません。
+
 ## テスト構成
 
 | ディレクトリ | 内容 |
