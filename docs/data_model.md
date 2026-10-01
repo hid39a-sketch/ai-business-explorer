@@ -34,12 +34,12 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 | `actors` | 操作者（`human` / `system`）。組織には memberships で所属する | `UNIQUE (id, actor_type)`（人間限定の複合 FK の参照先） |
 | `ai_employees` | AI社員の定義（正本）。組織ごとに持つ | `(organization_id, key)` は一意、`status ∈ draft/active/inactive`、`version ≥ 1` |
 | `stage_assignments` | ステージへのAI社員の割り当て | `role ∈ primary/secondary`、primary は組織×ステージごとに最大1人、`stage_key <> 'human_review'`、複合 FK（ai_employee_id, stage_key, organization_id）でAI社員の担当ステージ・組織と一致 |
-| `explorations` | 探索案件 | `status ∈ active/archived` |
+| `explorations` | 探索案件 | `status ∈ active/archived`、`classification ∈ public/internal/confidential/restricted`（既定 internal。Idea はこの分類に従う） |
 | `ideas` | 事業アイデア（仕様書9章の項目はすべて自由記述テキスト） | `adoption_status ∈ candidate/adopted/rejected`、`origin_type = 'ai'` と `origin_analysis_id IS NOT NULL` が同値 |
 | `stage_runs` | ステージ実行の試行。ワーカーの記録（`claimed_at`、`worker_id`、`heartbeat_at`）を持つ | ステージと範囲の整合（idea_generation なら idea_id は NULL）、起動者は human、試行番号は一意、**最新（未 supersede）の試行は範囲×ステージごとに1つ**（部分一意インデックス）、`status` |
 | `executions` | AI社員の実行履歴（入力、出力、エラー、使用量、各種バージョン）。`assignment_role` は primary / secondary | `status`、`error_type`、`assignment_role ∈ primary/secondary`、**primary は stage_run ごとに1つ**（部分一意インデックス）、同じ AI社員は stage_run ごとに1回、`started_at` は queued の間は NULL |
-| `analyses` | AI Analysis（本体は不変） | `review_status`、`version_no ≥ 1`、`execution_id NOT NULL`、`ai_employee_id` は実行の AI社員と一致（複合 FK）、**版番号は範囲×ステージ×AI社員ごとに一意** |
-| `evidence` | 根拠・出典（不変。訂正は撤回＋新規登録。本文の消去だけは記録付きで可） | `source_type` に `ai_generated` を含めない、撤回日時と撤回理由は必ずセット、更新版の連鎖（`supersedes_evidence_id`）は一意・自分自身を指さない・同じ組織、消去の記録（日時・理由・消去した人間）は必ずセットで、消去した人は human のみ（複合 FK + CHECK） |
+| `analyses` | AI Analysis（本体は不変） | `review_status`、`version_no ≥ 1`、`execution_id NOT NULL`、`classification`（入力の最も高い分類。算出値）、`ai_employee_id` は実行の AI社員と一致（複合 FK）、**版番号は範囲×ステージ×AI社員ごとに一意** |
+| `evidence` | 根拠・出典（不変。訂正は撤回＋新規登録。本文の消去だけは記録付きで可） | `source_type` に `ai_generated` を含めない、撤回日時と撤回理由は必ずセット、更新版の連鎖（`supersedes_evidence_id`）は一意・自分自身を指さない・同じ組織、消去の記録（日時・理由・消去した人間）は必ずセットで、消去した人は human のみ（複合 FK + CHECK）、`classification`（既定 internal。登録後は変えない） |
 | `claims` | AI Analysis の主張（正本。不変） | `kind ∈ evidence_based/inference/speculation`、`(analysis_id, claim_key)` は一意 |
 | `claim_evidence_links` | 主張と Evidence の関係（正本。不変） | 主キーは `(claim_id, evidence_id, relation)`、`relation ∈ supports/contradicts/context`、主張・Evidence と同じ組織（複合 FK） |
 | `analysis_evidence_links` | 第1回の根拠リンク（履歴。凍結） | INSERT / UPDATE / DELETE / TRUNCATE を DB トリガーで拒否。アプリも書き込まない |
@@ -121,3 +121,4 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 - `0003`：主張と根拠リンク。第1回の `analyses.body.claims` から `claims` を、`analysis_evidence_links` から `claim_evidence_links` を作ります（`body` は変えない）。旧リンクを1件でも取りこぼす場合は移行を中止します。移行の後、`analysis_evidence_links` を DB トリガーで凍結します。downgrade は開発用で、0003 以降に作った分析の主張と根拠リンクは失われます。
 - `0004`：Evidence の版と消去の列（`source_key`、`snapshot_hash`、`supersedes_evidence_id`、消去の記録）と、一覧のカーソル方式のための複合インデックス（組織・親のID・作成日時（stage_runs は開始日時）・ID）。
 - `0005`：非同期実行。stage_runs / executions の状態に `queued` と `cancelled` を追加し、ワーカーの列と `executions.assignment_role`（既存はすべて primary）を追加します。`analyses.ai_employee_id` を実行から埋め、版の連鎖を AI社員単位にします（既存の版番号は変えない）。downgrade は開発用で、`queued` / `cancelled` は `failed` に、未開始の実行の開始日時は作成日時になります。
+- `0006`：データ分類。`explorations`・`evidence`・`analyses` に `classification` を追加します。既存の行はすべて `internal`（既存の分析の入力もすべて internal のため、算出値としても正しい）。downgrade は開発用で、分類の記録は失われます。

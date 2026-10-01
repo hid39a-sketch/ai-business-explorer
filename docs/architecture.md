@@ -44,6 +44,7 @@ PostgreSQL 16
 | 差し戻し、Human Review、Human Decision、Idea の採否 | reviewer 以上 |
 | AI社員の登録・更新（設定変更） | admin |
 | ステージ担当（primary / secondary）の設定変更 | admin |
+| 探索案件のデータ分類を下げる | admin（上げるのは member） |
 | ステージ実行の取り消し | member |
 
 上位のロールは下位のロールの操作もできます（viewer < member < reviewer < admin）。
@@ -61,6 +62,16 @@ PostgreSQL 16
 9. 成功した場合：`analyses`、`claims`、`claim_evidence_links`、（idea_generation の primary なら）`candidate` の Idea を1トランザクションで保存する。secondary の出力からは Idea を作らない。第1回の `analysis_evidence_links` には書き込まない（凍結済み）。
 10. 失敗した場合：部分的な出力をロールバックし、別トランザクションでその execution に `failed` と `error_type` を記録する。
 11. stage_run の状態は primary の結果で決まる（primary が成功なら `succeeded`、それ以外は `failed`）。secondary が失敗しても stage_run は失敗にしない。
+
+### データ分類（第2回仕様 11章）
+
+- 分類は `public` < `internal` < `confidential` < `restricted` の4段階。探索案件と Evidence に付け、既定は `internal`。Idea は探索案件の分類に従う（列を持たない）。
+- 分析の分類（`analyses.classification`）は、その実行の入力（探索案件・Evidence・前段の分析）の最も高い分類。算出値で、人間も変更できない。前段の分析を通じて後続ステージに引き継がれる。
+- LLM プロバイダーごとの送信上限は設定 `LLM_MAX_CLASSIFICATION`（JSON、例：`{"fake": "internal"}`）で持つ。指定のないプロバイダーは `internal`。契約条件を確認するまで `internal` のままにする（R-03）。`restricted` はどの LLM にも送らない（設定しても拒否する）。
+- 起動時：入力の最も高い分類が、primary・secondary の各 AI社員のプロバイダーの上限を超えたら 409 で拒否し、実行記録も作らない。
+- 実行時：受付の後に分類が上がった場合に備え、ワーカーは LLM を呼ぶ前にもう一度確認し、超えていれば LLM に送らずにその execution を `failed`（`validation_error`）にする。
+- 探索案件の分類を下げる変更は admin のみ（上げるのは member 以上）。Evidence の分類は登録時に決め、後から変えない（訂正は撤回＋新規登録）。撤回した Evidence は入力にならないので、分類の確認にも数えない。
+- 運用：機密性の高い資料を登録するときは、Evidence の `classification` を明示する。分類を誤って低く登録した場合は、その Evidence を撤回して正しい分類で登録し直す。
 
 ### 取り消し・タイムアウト・heartbeat
 
@@ -96,7 +107,7 @@ PostgreSQL 16
 | Tool | `executions.output.tool_calls`（name, version, side_effect） |
 | Analysis | `analyses.schema_version / version_no / supersedes_id`。版の連鎖は「範囲 × ステージ × AI社員」単位 |
 | コード | `executions.code_version`（git SHA。取得できなければ `unknown`） |
-| 入力 | `stage_runs.input_snapshot`、`executions.input`（使った Evidence と Analysis の ID） |
+| 入力 | `stage_runs.input_snapshot`、`executions.input`（使った Evidence と Analysis の ID、入力の最も高い分類） |
 
 ## 設計判断（第1回で確定したもの）
 

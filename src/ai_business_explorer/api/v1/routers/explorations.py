@@ -7,6 +7,7 @@ from ai_business_explorer.api.v1.deps import (
     AgentRegistryDep,
     MemberDep,
     PageDep,
+    PrincipalDep,
     SessionDep,
     SettingsDep,
     ToolRegistryDep,
@@ -54,11 +55,19 @@ def get_exploration(exploration_id: UUID, session: SessionDep) -> object:
     return ExplorationService(session).get(exploration_id)
 
 
-@router.patch("/{exploration_id}", response_model=ExplorationOut)
+@router.patch(
+    "/{exploration_id}",
+    response_model=ExplorationOut,
+    summary="探索案件を更新する（member 以上。データ分類を下げるのは admin のみ）",
+)
 def update_exploration(
-    exploration_id: UUID, body: ExplorationUpdate, actor: MemberDep, session: SessionDep
+    exploration_id: UUID,
+    body: ExplorationUpdate,
+    actor: MemberDep,
+    principal: PrincipalDep,
+    session: SessionDep,
 ) -> object:
-    return ExplorationService(session).update(actor, exploration_id, body)
+    return ExplorationService(session).update(actor, principal.role, exploration_id, body)
 
 
 @router.post("/{exploration_id}/ideas", response_model=IdeaOut, status_code=status.HTTP_201_CREATED)

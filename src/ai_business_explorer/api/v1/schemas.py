@@ -65,6 +65,8 @@ class ExplorationOut(_Out):
     theme: str
     description: str | None
     status: str
+    # データ分類（public / internal / confidential / restricted）。Idea はこの分類に従う
+    classification: str
     created_by_actor_id: UUID
     created_at: UTCDateTime
     updated_at: UTCDateTime
@@ -130,6 +132,7 @@ class EvidenceOut(_Out):
     content_purged_at: UTCDateTime | None
     purge_reason: str | None
     purged_by_actor_id: UUID | None
+    classification: str
     created_at: UTCDateTime
     # 状態（取得時に算出。優先順位 purged > retracted > superseded > active）と、元の各状態
     evidence_status: str = "active"
@@ -231,6 +234,8 @@ class AnalysisOut(_Out):
     summary: str
     body: dict[str, Any]
     review_status: str
+    # 入力（探索案件・Evidence・前段の分析）の最も高い分類（算出値）
+    classification: str
     created_at: UTCDateTime
 
 

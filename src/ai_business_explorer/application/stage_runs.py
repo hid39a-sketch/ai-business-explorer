@@ -57,6 +57,7 @@ from ai_business_explorer.domain.enums import (
     ACTIVE_RUN_STATUSES,
     AdoptionStatus,
     AIEmployeeStatus,
+    DataClassification,
     ErrorType,
     ExplorationStatus,
     OriginType,
@@ -64,6 +65,7 @@ from ai_business_explorer.domain.enums import (
     RunStatus,
     StageAssignmentRole,
     StageRunTrigger,
+    highest_classification,
 )
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
 from ai_business_explorer.domain.evidence import EvidenceStatus
@@ -472,7 +474,39 @@ class StageRunService:
 
     # ------------------------------------------------------------------ 受付
 
+    def _check_classification(self, plan: _Plan) -> None:
+        """入力の最も高い分類が、担当AI社員の LLM プロバイダーの送信上限を超えたら起動しない。
+
+        第2回仕様 11章：409 で拒否し、実行記録も作らない。入力は探索案件（Idea はこれに従う）・
+        Evidence（active）・前段の分析。
+        """
+        highest = self._input_classification(
+            plan.exploration,
+            self._evidence_for(plan.exploration, plan.idea),
+            self._prior_analyses_for(plan.exploration, plan.idea, plan.stage),
+        )
+        for member in plan.members:
+            provider, _ = resolve_llm_config(member.employee.llm_config, self.settings.llm_provider)
+            limit = self.settings.llm_send_limit(provider)
+            if highest.exceeds(limit):
+                raise InvalidStateError(
+                    f"input classification '{highest.value}' exceeds the send limit "
+                    f"'{limit.value}' of LLM provider '{provider}' "
+                    f"(ai_employee {member.employee.id})"
+                )
+
+    @staticmethod
+    def _input_classification(
+        exploration: Exploration, evidence: Sequence[Evidence], prior: Sequence[Analysis]
+    ) -> DataClassification:
+        return highest_classification(
+            [exploration.classification]
+            + [e.classification for e in evidence]
+            + [a.classification for a in prior]
+        )
+
     def _start(self, actor: Actor, plan: _Plan) -> StageRun:
+        self._check_classification(plan)
         stage_run = self._queue(actor, plan)
         if self.settings.execution_mode == "sync":
             self.execute(stage_run.id, worker_id="sync")
@@ -591,6 +625,8 @@ class StageRunService:
             ],
             "analysis_ids": [str(a.id) for a in prior],
             "research_question": stage_run.research_question,
+            # 入力の最も高い分類（第2回仕様 11章）。分析の分類になる
+            "classification": self._input_classification(exploration, evidence, prior).value,
         }
         self.session.commit()
 
@@ -630,6 +666,14 @@ class StageRunService:
         execution.input = stage_run.input_snapshot
         self.session.commit()
         try:
+            # 受付の後に分類が上がった場合に備え、実行の直前にも送信上限を確認する
+            classification = DataClassification(stage_run.input_snapshot["classification"])
+            limit = self.settings.llm_send_limit(execution.llm_provider or "")
+            if classification.exceeds(limit):
+                raise DomainValidationError(
+                    f"input classification '{classification.value}' exceeds the send limit "
+                    f"'{limit.value}' of LLM provider '{execution.llm_provider}'"
+                )
             agent = self._agent_for(employee)
             _, model = resolve_llm_config(employee.llm_config, self.settings.llm_provider)
             llm = TrackingLLMClient(
@@ -765,6 +809,7 @@ class StageRunService:
                 summary=draft.summary,
                 body=to_jsonable({"claims": draft.claims, "data": draft.data}),
                 review_status=ReviewStatus.PENDING_REVIEW.value,
+                classification=stage_run.input_snapshot["classification"],
             )
         )
         # 主張と根拠は claims / claim_evidence_links が正本。

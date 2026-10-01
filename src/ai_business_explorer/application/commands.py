@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ai_business_explorer.domain.enums import (
     AIEmployeeStatus,
+    DataClassification,
     EvidenceSourceType,
     ExplorationStatus,
     HumanDecisionValue,
@@ -79,15 +80,19 @@ class ExplorationCreate(_Command):
     title: str = ShortText
     theme: str = Field(min_length=1, max_length=2000)
     description: str | None = LongText
+    # データ分類（第2回仕様 11章）。Idea はこの分類に従う
+    classification: DataClassification = DataClassification.INTERNAL
 
 
 class ExplorationUpdate(_PartialUpdate):
-    non_nullable = frozenset({"title", "theme", "status"})
+    non_nullable = frozenset({"title", "theme", "status", "classification"})
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
     theme: str | None = Field(default=None, min_length=1, max_length=2000)
     description: str | None = LongText
     status: ExplorationStatus | None = None
+    # 分類を下げる変更は admin のみ
+    classification: DataClassification | None = None
 
 
 class IdeaProfile(_PartialUpdate):
@@ -136,6 +141,8 @@ class EvidenceCreate(_Command):
     published_at: datetime | None = None
     retrieved_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # データ分類（第2回仕様 11章）。登録後は変えない（訂正は撤回＋新規登録）
+    classification: DataClassification = DataClassification.INTERNAL
 
     @field_validator("url")
     @classmethod
