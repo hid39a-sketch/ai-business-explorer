@@ -148,3 +148,34 @@ def test_seeded_actor_ids(human: Actor, system_actor: Actor) -> None:
     assert human.actor_type == "human"
     assert system_actor.actor_type == "system"
     assert isinstance(human.id, UUID)
+
+
+def test_evidence_retraction_requires_reason(
+    session: Session, exploration: Exploration, human: Actor
+) -> None:
+    _assert_rejected(
+        session,
+        lambda: Evidence(
+            exploration_id=exploration.id,
+            source_type="human_input",
+            title="x",
+            content_hash="0" * 64,
+            created_by_actor_id=human.id,
+            retracted_at=datetime.now(UTC),
+        ),
+    )
+
+
+def test_analysis_evidence_link_rejects_unknown_relation_and_dangling_evidence(
+    session: Session, exploration: Exploration, human: Actor
+) -> None:
+    from uuid import uuid4
+
+    from ai_business_explorer.infrastructure.db.models import AnalysisEvidenceLink
+
+    _assert_rejected(
+        session,
+        lambda: AnalysisEvidenceLink(
+            analysis_id=uuid4(), evidence_id=uuid4(), claim_ref="c1", relation="supports"
+        ),
+    )
