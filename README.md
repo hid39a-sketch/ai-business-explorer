@@ -34,6 +34,7 @@ make up        # PostgreSQL 16（docker compose）
 make migrate   # alembic upgrade head
 make seed      # 既定組織 / human actor（admin）/ system actor（ロールなし）/ Fake AI社員2体
 make run       # http://localhost:8000/docs
+make worker    # ステージ実行のワーカー（別のターミナルで。EXECUTION_MODE=sync なら不要）
 make check     # lint + typecheck + test + alembic check
 ```
 
@@ -44,7 +45,7 @@ Docker を使わない場合は、PostgreSQL 16 を用意して `DATABASE_URL` �
 `/api/v1/stages` と `/api/v1/health` 以外のすべての API に `X-Actor-Id` ヘッダが必要です（閲覧を含む）。操作者は組織に所属する人間で、ロール（admin / reviewer / member / viewer）に応じた操作だけができます（[Architecture](docs/architecture.md) の「組織とロール」）。シードされた人間 actor `00000000-0000-7000-8000-000000000001` は既定組織の admin です。
 
 1. `POST /api/v1/explorations` で探索案件を作成する
-2. `POST /api/v1/explorations/{id}/stage-runs` で IdeaGenerator を実行する（Idea 候補が `candidate` で登録される）
+2. `POST /api/v1/explorations/{id}/stage-runs` で IdeaGenerator を実行する。202（`queued`）で受け付け、ワーカーが実行する。`GET /api/v1/stage-runs/{id}` で状態（`queued` / `running` / `succeeded` / `failed` / `cancelled`）を確認する。成功すると Idea 候補が `candidate` で登録される。`POST /api/v1/stage-runs/{id}/cancel` で取り消せる
 3. `POST /api/v1/ideas/{id}/adopt` で人間が採用する（採用しないと後続ステージは実行できない）
 4. `POST /api/v1/evidence` で根拠を登録する（`source_type` は `human_input` / `document`）
 5. `POST /api/v1/ideas/{id}/stage-runs`（`{"stage_key": "market_research"}`）で MarketResearcher を実行する

@@ -9,6 +9,7 @@ from ai_business_explorer.api.v1.routers import (
     evidence,
     explorations,
     ideas,
+    stage_assignments,
     stage_runs,
 )
 
@@ -22,5 +23,14 @@ def health(session: DbSessionDep) -> dict[str, str]:
     return {"status": "ok"}
 
 
-for module in (actors, ai_employees, explorations, ideas, stage_runs, evidence, analyses):
+for module in (
+    actors,
+    ai_employees,
+    stage_assignments,
+    explorations,
+    ideas,
+    stage_runs,
+    evidence,
+    analyses,
+):
     api_router.include_router(module.router)

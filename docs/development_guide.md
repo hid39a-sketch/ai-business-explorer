@@ -5,8 +5,11 @@
 ```bash
 cp .env.example .env
 make setup && make up && make migrate && make seed
-make run   # http://localhost:8000/docs
+make run     # http://localhost:8000/docs
+make worker  # ステージ実行のワーカー（別のターミナルで起動する）
 ```
+
+ステージ実行の API は受け付けると 202 を返し、ワーカーが実行します。ワーカーなしで動かすときは `.env` に `EXECUTION_MODE=sync` を設定すると、応答の前に実行を終えます（テストも sync で動かす）。
 
 Docker が使えない環境（Cloud Session など）では、ローカルの PostgreSQL 16 を使います。
 
@@ -33,7 +36,7 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 |---|---|
 | `tests/unit/` | ステージ定義、Fake LLM、Tool のポリシー、Prompt、AI社員、AI社員から DB への到達禁止（import 検査） |
 | `tests/integration/` | DB 制約（人間限定、ai_generated の拒否、ステージ範囲、AI 生成 Idea の出自、ロールは人間のみ、担当の制約、組織の一致） |
-| `tests/api/` | API の一連の流れ（AI社員の CRUD、Idea、実行の成功と失敗、Evidence、Analysis、Review、Decision、再実行、差し戻し、監査ログ）、ロールごとの操作の可否、組織による分離 |
+| `tests/api/` | API の一連の流れ（AI社員の CRUD、Idea、実行の成功と失敗、Evidence、Analysis、Review、Decision、再実行、差し戻し、監査ログ）、非同期実行（受付・ワーカー・取り消し・タイムアウト・heartbeat・primary / secondary）、ロールごとの操作の可否、組織による分離 |
 | `tests/migrations/` | migration による既存データの移行。テストモジュールごとに専用のデータベース（`<TEST_DATABASE_URL のDB名>_<モジュール名>`）を作って使うため、DB ユーザーに CREATE DATABASE の権限が必要 |
 
 LLM は `FakeLLMClient` で、応答は決定的です。失敗のテストでは、`StageRunService(llm_client_factory=...)` に例外を投げる Fake を渡します。

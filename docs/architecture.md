@@ -43,18 +43,31 @@ PostgreSQL 16
 | 探索案件・Idea の作成と更新、Evidence の登録と撤回、ステージの実行・再実行 | member 以上 |
 | 差し戻し、Human Review、Human Decision、Idea の採否 | reviewer 以上 |
 | AI社員の登録・更新（設定変更） | admin |
+| ステージ担当（primary / secondary）の設定変更 | admin |
+| ステージ実行の取り消し | member |
 
 上位のロールは下位のロールの操作もできます（viewer < member < reviewer < admin）。
 
-## AI社員の実行フロー（同期）
+## AI社員の実行フロー（非同期）
 
-1. 人間が API からステージ実行を起動する（自動で次のステージへは進まない）。AI に渡す Evidence は active のものだけ（superseded・retracted・purged は渡さない）。渡した Evidence の ID と状態は `stage_runs.input_snapshot` に残す。
-2. 事前検証：Idea が `adopted` か、前のステージに成功した最新の試行があるか、担当 AI社員が `active` で実装があるか。
-3. `stage_runs` と `executions` を `running` で作成してコミットする。再実行・差し戻しの場合は、対象ステージ以降の最新試行に `superseded_at` を記録する。
-4. `AgentContext`（読み取り専用の入力、LLM、ToolBox、Prompt）を組み立てて AI社員を実行する。
-5. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、relation の規則（重複なし、supports と contradicts の同時指定なし、`evidence_based` は supports か contradicts が必須）を守っているか、Idea 候補を出せるのは idea_generation だけか。
-6. 成功した場合：`analyses`、`claims`、`claim_evidence_links`、（idea_generation なら）`candidate` の Idea を1トランザクションで保存する。第1回の `analysis_evidence_links` には書き込まない（凍結済み）。
-7. 失敗した場合：部分的な出力をロールバックし、別トランザクションで `failed` と `error_type` を記録する。API は 500 を返さず、`failed` の stage_run を返す。
+1. 人間が API からステージ実行を起動する（自動で次のステージへは進まない）。
+2. 事前検証：Idea が `adopted` か、前のステージに成功した最新の試行があるか、担当 AI社員が `active` で実装があるか、同じ範囲で置き換える試行がまだ終わっていない（`queued` / `running`）ことはないか（あれば 409）。
+3. 担当を決める。primary は、人間が指定した `ai_employee_id` → `stage_assignments` の primary → 有効な社員が1人だけならその社員、の順。secondary は人間が `secondary_ai_employee_ids` で選んだ社員で、そのステージに secondary として割り当てられている必要がある。
+4. `stage_runs` と `executions`（primary と secondary それぞれ1件）を `queued` で作成してコミットし、**202** を返す。再実行・差し戻しの場合は、対象ステージ以降の最新試行に `superseded_at` を記録する。
+5. ワーカー（`make worker`）が最も古い `queued` を1つ取り出し（`FOR UPDATE SKIP LOCKED`）、`running` にして実行する。実行中は別のセッションで `heartbeat_at` を更新する。`EXECUTION_MODE=sync`（テストと Fake LLM 用）では、応答の前に同じ処理で実行する。
+6. AI に渡す入力を、実行を始めた時点で決める。Evidence は active のものだけ（superseded・retracted・purged は渡さない）。前段の分析は、成功した最新の試行の **primary** のものだけ。渡した ID と状態は `stage_runs.input_snapshot` に残す。
+7. primary を先に、続いて secondary を実行する。`AgentContext`（読み取り専用の入力、LLM、ToolBox、Prompt）を組み立てて AI社員を実行する。
+8. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、relation の規則（重複なし、supports と contradicts の同時指定なし、`evidence_based` は supports か contradicts が必須）を守っているか、Idea 候補を出せるのは idea_generation だけか。
+9. 成功した場合：`analyses`、`claims`、`claim_evidence_links`、（idea_generation の primary なら）`candidate` の Idea を1トランザクションで保存する。secondary の出力からは Idea を作らない。第1回の `analysis_evidence_links` には書き込まない（凍結済み）。
+10. 失敗した場合：部分的な出力をロールバックし、別トランザクションでその execution に `failed` と `error_type` を記録する。
+11. stage_run の状態は primary の結果で決まる（primary が成功なら `succeeded`、それ以外は `failed`）。secondary が失敗しても stage_run は失敗にしない。
+
+### 取り消し・タイムアウト・heartbeat
+
+- **取り消し**：人間（member 以上）が `POST /stage-runs/{id}/cancel` で `queued` / `running` の実行を `cancelled` にする。まだ終わっていない execution も `cancelled` になる。ワーカーは LLM・Tool を呼ぶ前と、出力を保存する直前に状態を確認して止まり、取り消し後に返ってきた出力は保存しない（すでに送った LLM の呼び出しは止められない）。`cancelled` は後から上書きしない。
+- **タイムアウト**：ステージ実行全体（`STAGE_RUN_TIMEOUT_SECONDS`、既定 600 秒）を超えたら、次の LLM・Tool の呼び出しの前に止めて `failed`（`timeout`）にする。LLM の1回の呼び出しの上限（`LLM_CALL_TIMEOUT_SECONDS`、既定 120 秒）は LLM アダプターに渡す。
+- **heartbeat**：`heartbeat_at` が `WORKER_HEARTBEAT_TIMEOUT_SECONDS`（既定 60 秒）より古い `running` の実行は、いずれかのワーカーが `failed`（`unexpected`、"worker heartbeat lost"）にする。
+- どの場合も、自動の再実行・次のステージへの連鎖はしない。人間が再実行する。
 
 ## 人間専用の操作（AI からの経路なし）
 
@@ -63,6 +76,8 @@ PostgreSQL 16
 | Human Review | reviewer 以上 | `require_human` | 複合 FK（actor_id, actor_type）+ `CHECK (reviewer_actor_type = 'human')` |
 | Human Decision | reviewer 以上 | `require_human` + 対象 Idea が `adopted` であること | 同上 |
 | ステージ実行・再実行 | member 以上 | `require_human` | `stage_runs` に同様の複合 FK + CHECK |
+| ステージ実行の取り消し | member 以上 | `require_human` | （監査ログに記録） |
+| ステージ担当の設定 | admin | `require_human` | （監査ログに記録） |
 | 差し戻し | reviewer 以上 | `require_human` | 同上 |
 | Idea の採用・却下 | reviewer 以上 | `require_human` | （監査ログに記録） |
 | Idea の更新 | member 以上 | `require_human` | （監査ログに記録） |
@@ -79,7 +94,7 @@ PostgreSQL 16
 | Prompt | `executions.prompt_key / prompt_version / prompt_hash`（SHA-256） |
 | LLM | `executions.llm_provider / llm_model / usage` |
 | Tool | `executions.output.tool_calls`（name, version, side_effect） |
-| Analysis | `analyses.schema_version / version_no / supersedes_id` |
+| Analysis | `analyses.schema_version / version_no / supersedes_id`。版の連鎖は「範囲 × ステージ × AI社員」単位 |
 | コード | `executions.code_version`（git SHA。取得できなければ `unknown`） |
 | 入力 | `stage_runs.input_snapshot`、`executions.input`（使った Evidence と Analysis の ID） |
 
@@ -107,7 +122,7 @@ PostgreSQL 16
 - 実ツール（Web Search、Patent Search、News、Financial Data、Internal DB / Knowledge Base）と、ツール経由の Evidence 自動登録
 - 残りの AI社員（CompetitorResearcher、TechnologyResearcher、PatentResearcher、MonetizationAnalyst、RiskAnalyst、BusinessAnalyst）
 - AI社員同士の相互検証
-- ステージの自動連鎖、ジョブキュー、非同期実行、タイムアウト制御、DAG・並列ステージ
+- ステージの自動連鎖、DAG・並列ステージ（非同期実行・タイムアウト・取り消しは第2回 PR-4 で実装）
 - 本格的な認証（`api/v1/deps.py` の `get_principal` で操作者を特定する部分を差し替える）、レビュー画面
 - 評価軸・スコア・ランキング
 - Evidence のベクトル検索（pgvector）

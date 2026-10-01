@@ -150,6 +150,15 @@ class EvidenceCreatedOut(EvidenceOut):
     warnings: list[EvidenceWarningOut] = Field(default_factory=list)
 
 
+class StageAssignmentOut(_Out):
+    id: UUID
+    organization_id: UUID
+    stage_key: str
+    ai_employee_id: UUID
+    role: str
+    created_at: UTCDateTime
+
+
 class ExecutionOut(_Out):
     id: UUID
     organization_id: UUID
@@ -172,7 +181,9 @@ class ExecutionOut(_Out):
     error_message: str | None
     error_detail: dict[str, Any] | None
     usage: dict[str, Any] | None
-    started_at: UTCDateTime
+    # primary（ステージの状態を決める）/ secondary（追加の視点）
+    assignment_role: str
+    started_at: UTCDateTime | None
     finished_at: UTCDateTime | None
     created_at: UTCDateTime
 
@@ -193,7 +204,11 @@ class StageRunOut(_Out):
     status: str
     input_snapshot: dict[str, Any]
     superseded_at: UTCDateTime | None
+    # 受け付けた時刻（並び順に使う）。ワーカーが取り出した時刻は claimed_at
     started_at: UTCDateTime
+    claimed_at: UTCDateTime | None
+    worker_id: str | None
+    heartbeat_at: UTCDateTime | None
     finished_at: UTCDateTime | None
 
 
@@ -208,6 +223,7 @@ class AnalysisOut(_Out):
     idea_id: UUID | None
     stage_run_id: UUID
     execution_id: UUID
+    ai_employee_id: UUID
     stage_key: str
     schema_version: str
     version_no: int

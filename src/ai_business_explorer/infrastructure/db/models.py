@@ -330,11 +330,16 @@ class StageRun(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     research_question: Mapped[str | None] = mapped_column(Text)
     triggered_by_actor_id: Mapped[UUID] = mapped_column()
     triggered_by_actor_type: Mapped[str] = mapped_column(String(16))
-    status: Mapped[str] = mapped_column(String(16), default=RunStatus.RUNNING.value)
+    status: Mapped[str] = mapped_column(String(16), default=RunStatus.QUEUED.value)
     input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 人間が起動（受付）した日時。一覧の並び順にも使う。
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 非同期実行（第2回仕様 9章）：ワーカーが取り出した日時・ワーカーID・生存確認の時刻
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_id: Mapped[str | None] = mapped_column(String(128))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Execution(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
@@ -351,10 +356,28 @@ class Execution(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Ba
         CheckConstraint(
             f"error_type IS NULL OR error_type IN ({sql_in(ErrorType)})", name="error_type"
         ),
+        CheckConstraint(
+            f"assignment_role IN ({sql_in(StageAssignmentRole)})", name="assignment_role"
+        ),
+        # 1つのステージ実行の primary は1つだけ
+        Index(
+            "uq_executions_primary_per_stage_run",
+            "stage_run_id",
+            unique=True,
+            postgresql_where=text(f"assignment_role = '{StageAssignmentRole.PRIMARY.value}'"),
+        ),
+        # 1つのステージ実行で同じ AI社員は1回だけ
+        UniqueConstraint("stage_run_id", "ai_employee_id", name="uq_executions_stage_run_employee"),
+        # analyses の AI社員と実行の AI社員の一致を複合 FK で保証するための一意制約
+        UniqueConstraint("id", "ai_employee_id", name="uq_executions_id_ai_employee_id"),
     )
 
     stage_run_id: Mapped[UUID] = mapped_column(ForeignKey("stage_runs.id"), index=True)
     ai_employee_id: Mapped[UUID] = mapped_column(ForeignKey("ai_employees.id"), index=True)
+    # primary の結果がステージの成果。secondary は追加の視点として記録するだけ（7章）
+    assignment_role: Mapped[str] = mapped_column(
+        String(16), default=StageAssignmentRole.PRIMARY.value
+    )
     idea_id: Mapped[UUID | None] = mapped_column(ForeignKey("ideas.id"), index=True)
     ai_employee_version: Mapped[int] = mapped_column(Integer)
     ai_employee_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB)
@@ -365,14 +388,15 @@ class Execution(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Ba
     llm_provider: Mapped[str | None] = mapped_column(String(64))
     llm_model: Mapped[str | None] = mapped_column(String(128))
     code_version: Mapped[str] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(String(16), default=RunStatus.RUNNING.value)
+    status: Mapped[str] = mapped_column(String(16), default=RunStatus.QUEUED.value)
     input: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error_type: Mapped[str | None] = mapped_column(String(32))
     error_message: Mapped[str | None] = mapped_column(Text)
     error_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # 実際に実行を始めた日時（queued の間は空）
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -384,6 +408,25 @@ class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
 
     __tablename__ = "analyses"
     __table_args__ = (
+        # 版の連鎖は「範囲 × ステージ × AI社員」単位（第2回仕様 7章）
+        Index(
+            "uq_analyses_exploration_version",
+            "exploration_id",
+            "stage_key",
+            "ai_employee_id",
+            "version_no",
+            unique=True,
+            postgresql_where=text("idea_id IS NULL"),
+        ),
+        Index(
+            "uq_analyses_idea_version",
+            "idea_id",
+            "stage_key",
+            "ai_employee_id",
+            "version_no",
+            unique=True,
+            postgresql_where=text("idea_id IS NOT NULL"),
+        ),
         Index(
             "ix_analyses_list_exploration", "organization_id", "exploration_id", "created_at", "id"
         ),
@@ -394,6 +437,12 @@ class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
             ["explorations.id", "explorations.organization_id"],
             name="fk_analyses_exploration_org",
         ),
+        # 分析の AI社員は、その分析を出した実行の AI社員と一致する
+        ForeignKeyConstraint(
+            ["execution_id", "ai_employee_id"],
+            ["executions.id", "executions.ai_employee_id"],
+            name="fk_analyses_execution_employee",
+        ),
         CheckConstraint(f"review_status IN ({sql_in(ReviewStatus)})", name="review_status"),
         CheckConstraint("version_no >= 1", name="version_positive"),
     )
@@ -402,6 +451,7 @@ class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
     idea_id: Mapped[UUID | None] = mapped_column(ForeignKey("ideas.id"), index=True)
     stage_run_id: Mapped[UUID] = mapped_column(ForeignKey("stage_runs.id"), index=True)
     execution_id: Mapped[UUID] = mapped_column(ForeignKey("executions.id"), index=True)
+    ai_employee_id: Mapped[UUID] = mapped_column(ForeignKey("ai_employees.id"), index=True)
     stage_key: Mapped[str] = mapped_column(String(64))
     schema_version: Mapped[str] = mapped_column(String(64))
     version_no: Mapped[int] = mapped_column(Integer)

@@ -181,8 +181,9 @@ class AnalysisRepository(Repository[Analysis]):
     model = Analysis
 
     def latest_for_stage(
-        self, exploration_id: UUID, idea_id: UUID | None, stage_key: str
+        self, exploration_id: UUID, idea_id: UUID | None, stage_key: str, ai_employee_id: UUID
     ) -> Analysis | None:
+        """版の連鎖は「範囲 × ステージ × AI社員」単位（第2回仕様 7章）。"""
         scope = (
             [Analysis.exploration_id == exploration_id, Analysis.idea_id.is_(None)]
             if idea_id is None
@@ -190,7 +191,9 @@ class AnalysisRepository(Repository[Analysis]):
         )
         stmt = (
             select(Analysis)
-            .where(*scope, Analysis.stage_key == stage_key)
+            .where(
+                *scope, Analysis.stage_key == stage_key, Analysis.ai_employee_id == ai_employee_id
+            )
             .order_by(Analysis.version_no.desc())
             .limit(1)
         )

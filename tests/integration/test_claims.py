@@ -69,6 +69,7 @@ def _analysis(session: Session, human: Actor, exploration: Exploration) -> Analy
         exploration_id=exploration.id,
         stage_run_id=run.id,
         execution_id=execution.id,
+        ai_employee_id=employee.id,
         stage_key="idea_generation",
         schema_version="v1",
         version_no=1,

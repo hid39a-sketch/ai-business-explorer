@@ -1,13 +1,22 @@
-"""ステージ実行（第1回は同期）。
+"""ステージ実行（第2回は非同期。第2回仕様 7章・9章）。
 
-- 1ステージずつ人間が API から起動する。自動でステージを連鎖させない。
+- 1ステージずつ人間が API から起動する。自動でステージを連鎖させない。自動の再実行もしない。
+- 起動すると stage_run と execution を queued で記録して受け付ける（202）。ワーカーが取り出して
+  実行する（EXECUTION_MODE=sync では応答の前に同じ処理で実行する）。
+- 1回の起動で primary と、人間が選んだ secondary の execution を作る。stage_run の状態は primary の
+  execution で決まり、secondary が失敗しても stage_run は失敗にしない。secondary の分析は
+  追加の視点として記録するだけで、後続ステージの入力と Idea 候補には使わない。
+- Analysis の版の連鎖は「範囲 × ステージ × AI社員」単位。
+- 人間は queued と running の実行を取り消せる。取り消し・タイムアウトは、以降の LLM・Tool の
+  呼び出しの前に確認して止める（すでに送った呼び出しは止められない）。
 - 再実行・差し戻しは人間のみ。対象ステージ以降の最新試行に superseded_at を記録する
   （履歴は消さない）。
 - 失敗しても実行記録が残るよう、記録の確定と AI社員の実行を別トランザクションに分ける。
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -45,6 +54,7 @@ from ai_business_explorer.application.common import (
 from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.config import Settings
 from ai_business_explorer.domain.enums import (
+    ACTIVE_RUN_STATUSES,
     AdoptionStatus,
     AIEmployeeStatus,
     ErrorType,
@@ -52,10 +62,12 @@ from ai_business_explorer.domain.enums import (
     OriginType,
     ReviewStatus,
     RunStatus,
+    StageAssignmentRole,
     StageRunTrigger,
 )
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
 from ai_business_explorer.domain.evidence import EvidenceStatus
+from ai_business_explorer.domain.execution import ExecutionCancelledError
 from ai_business_explorer.domain.stages import (
     IDEA_GENERATION,
     STAGES,
@@ -75,6 +87,7 @@ from ai_business_explorer.infrastructure.db.models import (
     Execution,
     Exploration,
     Idea,
+    StageAssignment,
     StageRun,
 )
 from ai_business_explorer.infrastructure.db.repositories import (
@@ -86,6 +99,7 @@ from ai_business_explorer.infrastructure.db.repositories import (
     ExecutionRepository,
     ExplorationRepository,
     IdeaRepository,
+    StageAssignmentRepository,
     StageRunRepository,
 )
 from ai_business_explorer.llm.base import LLMClient, LLMError, TrackingLLMClient
@@ -96,6 +110,14 @@ from ai_business_explorer.tools.base import ToolBox, ToolContext, ToolError, Too
 LLMClientFactory = Callable[[str], LLMClient]
 
 MAX_ERROR_MESSAGE = 2000
+HEARTBEAT_LOST_MESSAGE = "worker heartbeat lost"
+
+
+@dataclass
+class _Member:
+    employee: AIEmployee
+    agent: Agent
+    role: StageAssignmentRole
 
 
 @dataclass
@@ -104,8 +126,7 @@ class _Plan:
     idea: Idea | None
     stage: StageDefinition
     trigger: StageRunTrigger
-    employee: AIEmployee
-    agent: Agent
+    members: list[_Member]  # primary が先頭
     research_question: str | None
     rerun_of_id: UUID | None = None
     sent_back_from_id: UUID | None = None
@@ -126,6 +147,26 @@ def classify_error(exc: BaseException) -> ErrorType:
     return ErrorType.UNEXPECTED
 
 
+class _RunGuard:
+    """LLM・Tool を呼ぶ前に、取り消しとステージ実行全体のタイムアウトを確認する。"""
+
+    def __init__(self, session: Session, stage_run_id: UUID, deadline: datetime) -> None:
+        self._session = session
+        self._stage_run_id = stage_run_id
+        self._deadline = deadline
+
+    def check(self) -> None:
+        if utcnow() > self._deadline:
+            raise TimeoutError("stage run exceeded its time limit")
+        status = self._session.execute(
+            select(StageRun.status).where(StageRun.id == self._stage_run_id)
+        ).scalar_one()
+        if status == RunStatus.CANCELLED.value:
+            raise ExecutionCancelledError("stage run was cancelled")
+        if status != RunStatus.RUNNING.value:  # heartbeat 途絶として failed にされた等
+            raise ExecutionCancelledError(f"stage run is {status}")
+
+
 class StageRunService:
     def __init__(
         self,
@@ -143,6 +184,7 @@ class StageRunService:
         self.explorations = ExplorationRepository(session)
         self.ideas = IdeaRepository(session)
         self.employees = AIEmployeeRepository(session)
+        self.assignments = StageAssignmentRepository(session)
         self.stage_runs = StageRunRepository(session)
         self.executions = ExecutionRepository(session)
         self.analyses = AnalysisRepository(session)
@@ -159,18 +201,18 @@ class StageRunService:
         exploration = self._active_exploration(exploration_id)
         stage = get_stage(IDEA_GENERATION)
         trigger = self._check_rerun(exploration.id, None, stage, cmd.rerun_of_id)
-        employee, agent = self._select_employee(stage, cmd.ai_employee_id)
         plan = _Plan(
             exploration=exploration,
             idea=None,
             stage=stage,
             trigger=trigger,
-            employee=employee,
-            agent=agent,
+            members=self._select_members(
+                exploration, stage, cmd.ai_employee_id, cmd.secondary_ai_employee_ids
+            ),
             research_question=cmd.research_question,
             rerun_of_id=cmd.rerun_of_id,
         )
-        return self._run(actor, plan)
+        return self._start(actor, plan)
 
     def run_idea_stage(self, actor: Actor, idea_id: UUID, cmd: IdeaStageRunCommand) -> StageRun:
         require_human(actor, "run stages")
@@ -179,18 +221,18 @@ class StageRunService:
         stage = self._idea_stage(cmd.stage_key)
         self._check_idea_prerequisites(idea, stage)
         trigger = self._check_rerun(exploration.id, idea.id, stage, cmd.rerun_of_id)
-        employee, agent = self._select_employee(stage, cmd.ai_employee_id)
         plan = _Plan(
             exploration=exploration,
             idea=idea,
             stage=stage,
             trigger=trigger,
-            employee=employee,
-            agent=agent,
+            members=self._select_members(
+                exploration, stage, cmd.ai_employee_id, cmd.secondary_ai_employee_ids
+            ),
             research_question=cmd.research_question,
             rerun_of_id=cmd.rerun_of_id,
         )
-        return self._run(actor, plan)
+        return self._start(actor, plan)
 
     def send_back(self, actor: Actor, idea_id: UUID, cmd: SendBackCommand) -> StageRun:
         require_human(actor, "send back stages")
@@ -205,20 +247,51 @@ class StageRunService:
                 f"send-back target '{target.key}' must precede current stage '{current.key}'"
             )
         self._check_idea_prerequisites(idea, target)
+        self._check_no_active_run_from(exploration.id, idea.id, target)
         from_run = self.stage_runs.current(exploration.id, idea.id, current.key)
-        employee, agent = self._select_employee(target, cmd.ai_employee_id)
         plan = _Plan(
             exploration=exploration,
             idea=idea,
             stage=target,
             trigger=StageRunTrigger.SEND_BACK,
-            employee=employee,
-            agent=agent,
+            members=self._select_members(
+                exploration, target, cmd.ai_employee_id, cmd.secondary_ai_employee_ids
+            ),
             research_question=cmd.research_question,
             sent_back_from_id=from_run.id if from_run else None,
             reason=cmd.reason,
         )
-        return self._run(actor, plan)
+        return self._start(actor, plan)
+
+    def cancel(self, actor: Actor, stage_run_id: UUID) -> StageRun:
+        """queued / running の実行を取り消す（人間のみ）。自動の再実行はしない。"""
+        require_human(actor, "cancel stage runs")
+        stage_run = self.stage_runs.get_or_raise(stage_run_id)
+        # ワーカーの確定処理と競合しないよう、行をロックしてから状態を見る
+        self.session.refresh(stage_run, with_for_update=True)
+        if stage_run.status not in ACTIVE_RUN_STATUSES:
+            raise InvalidStateError(f"stage run is '{stage_run.status}' and cannot be cancelled")
+        now = utcnow()
+        before = stage_run.status
+        stage_run.status = RunStatus.CANCELLED.value
+        stage_run.finished_at = now
+        for execution in self.executions_for(stage_run.id):
+            if execution.status in ACTIVE_RUN_STATUSES:
+                execution.status = RunStatus.CANCELLED.value
+                execution.finished_at = now
+        self._recompute_idea_stage(stage_run)
+        record_audit(
+            self.session,
+            organization_id=stage_run.organization_id,
+            entity_type="stage_run",
+            entity_id=stage_run.id,
+            action="cancelled",
+            actor_id=actor.id,
+            before={"status": before},
+            after={"status": RunStatus.CANCELLED.value},
+        )
+        self.session.commit()
+        return stage_run
 
     # ------------------------------------------------------------------ 参照
 
@@ -226,7 +299,11 @@ class StageRunService:
         return self.stage_runs.get_or_raise(stage_run_id)
 
     def executions_for(self, stage_run_id: UUID) -> list[Execution]:
-        return list(self.executions.list_where(Execution.stage_run_id == stage_run_id))
+        """primary を先頭に、作成順で返す。"""
+        executions = self.executions.list_where(Execution.stage_run_id == stage_run_id)
+        return sorted(
+            executions, key=lambda e: e.assignment_role != StageAssignmentRole.PRIMARY.value
+        )
 
     def get_execution(self, execution_id: UUID) -> Execution:
         return self.executions.get_or_raise(execution_id)
@@ -297,110 +374,116 @@ class StageRunService:
             raise InvalidStateError(
                 "rerun_of_id must be the latest (non-superseded) run of the stage"
             )
+        self._check_no_active_run_from(exploration_id, idea_id, stage)
         return StageRunTrigger.RERUN
 
-    def _select_employee(
-        self, stage: StageDefinition, ai_employee_id: UUID | None
-    ) -> tuple[AIEmployee, Agent]:
+    def _check_no_active_run_from(
+        self, exploration_id: UUID, idea_id: UUID | None, stage: StageDefinition
+    ) -> None:
+        """再実行・差し戻しで置き換える試行に、まだ終わっていないものがあれば受け付けない。"""
+        keys = {s.key for s in stages_from(stage.key)}
+        for run in self.stage_runs.current_all(exploration_id, idea_id):
+            if run.stage_key in keys and run.status in ACTIVE_RUN_STATUSES:
+                raise InvalidStateError(
+                    f"stage '{run.stage_key}' has a {run.status} run ({run.id}); "
+                    "wait for it to finish or cancel it first"
+                )
+
+    def _select_members(
+        self,
+        exploration: Exploration,
+        stage: StageDefinition,
+        ai_employee_id: UUID | None,
+        secondary_ids: Sequence[UUID],
+    ) -> list[_Member]:
+        primary = self._primary_employee(exploration, stage, ai_employee_id)
+        members = [_Member(primary, self._agent_for(primary), StageAssignmentRole.PRIMARY)]
+        if len(set(secondary_ids)) != len(secondary_ids):
+            raise DomainValidationError("secondary_ai_employee_ids must be unique")
+        assigned = {
+            a.ai_employee_id
+            for a in self.assignments.list_where(
+                StageAssignment.organization_id == exploration.organization_id,
+                StageAssignment.stage_key == stage.key,
+                StageAssignment.role == StageAssignmentRole.SECONDARY.value,
+            )
+        }
+        for employee_id in secondary_ids:
+            if employee_id == primary.id:
+                raise DomainValidationError("the primary AI employee cannot also be secondary")
+            if employee_id not in assigned:
+                raise DomainValidationError(
+                    f"ai_employee {employee_id} is not assigned as secondary to '{stage.key}'"
+                )
+            employee = self.employees.get_or_raise(employee_id)
+            members.append(
+                _Member(employee, self._agent_for(employee), StageAssignmentRole.SECONDARY)
+            )
+        return members
+
+    def _primary_employee(
+        self, exploration: Exploration, stage: StageDefinition, ai_employee_id: UUID | None
+    ) -> AIEmployee:
+        """人間の指定 → 担当（primary）の割り当て → 有効な社員が1人だけならその社員、の順。"""
         if ai_employee_id is not None:
             employee = self.employees.get_or_raise(ai_employee_id)
             if employee.stage_key != stage.key:
                 raise DomainValidationError("ai_employee is not assigned to this stage")
-            candidates = [employee]
-        else:
-            candidates = list(
-                self.employees.list_where(
-                    AIEmployee.stage_key == stage.key,
-                    AIEmployee.status == AIEmployeeStatus.ACTIVE.value,
-                    AIEmployee.implementation_key.is_not(None),
-                )
+            return employee
+        primary = self.assignments.list_where(
+            StageAssignment.organization_id == exploration.organization_id,
+            StageAssignment.stage_key == stage.key,
+            StageAssignment.role == StageAssignmentRole.PRIMARY.value,
+        )
+        if primary:
+            return self.employees.get_or_raise(primary[0].ai_employee_id)
+        candidates = list(
+            self.employees.list_where(
+                AIEmployee.organization_id == exploration.organization_id,
+                AIEmployee.stage_key == stage.key,
+                AIEmployee.status == AIEmployeeStatus.ACTIVE.value,
+                AIEmployee.implementation_key.is_not(None),
             )
-            if not candidates:
-                raise InvalidStateError(
-                    f"no active AI employee with an implementation for '{stage.key}'"
-                )
-            if len(candidates) > 1:
-                raise InvalidStateError(
-                    f"multiple active AI employees for '{stage.key}'; specify ai_employee_id"
-                )
-        employee = candidates[0]
+        )
+        if not candidates:
+            raise InvalidStateError(
+                f"no active AI employee with an implementation for '{stage.key}'"
+            )
+        if len(candidates) > 1:
+            raise InvalidStateError(
+                f"multiple active AI employees for '{stage.key}' and no primary; "
+                "specify ai_employee_id"
+            )
+        return candidates[0]
+
+    def _agent_for(self, employee: AIEmployee) -> Agent:
         if employee.status != AIEmployeeStatus.ACTIVE.value:
-            raise InvalidStateError("ai_employee is not active")
+            raise InvalidStateError(f"ai_employee {employee.id} is not active")
         if employee.implementation_key is None:
-            raise InvalidStateError("ai_employee has no implementation and cannot be executed")
+            raise InvalidStateError(f"ai_employee {employee.id} has no implementation")
         agent = self.agent_registry.get(employee.implementation_key)
         if agent is None:
             raise InvalidStateError(f"implementation not found: {employee.implementation_key}")
         if not (employee.prompt_key and employee.prompt_version) or not prompt_exists(
             employee.prompt_key, employee.prompt_version
         ):
-            raise InvalidStateError("ai_employee prompt is missing")
-        return employee, agent
+            raise InvalidStateError(f"ai_employee {employee.id} prompt is missing")
+        return agent
 
-    # ------------------------------------------------------------------ 実行
+    # ------------------------------------------------------------------ 受付
 
-    def _run(self, actor: Actor, plan: _Plan) -> StageRun:
-        evidence = self._evidence_for(plan)
-        prior = self._prior_analyses_for(plan)
-        exploration_view = ExplorationView.model_validate(plan.exploration, from_attributes=True)
-        idea_view = IdeaView.model_validate(plan.idea, from_attributes=True) if plan.idea else None
-        evidence_views = [EvidenceView.model_validate(e, from_attributes=True) for e in evidence]
-        prior_views = [AnalysisView.model_validate(a, from_attributes=True) for a in prior]
-
-        stage_run, execution = self._open_records(actor, plan, evidence, prior)
-        try:
-            provider, model = resolve_llm_config(
-                plan.employee.llm_config, self.settings.llm_provider
-            )
-            llm = TrackingLLMClient(self.llm_client_factory(provider))
-            prompt = load_prompt(execution.prompt_key or "", execution.prompt_version or "")
-            tools = ToolBox(
-                self.tool_registry,
-                allowed_tools=list(plan.employee.allowed_tools),
-                allowed_side_effects=list(self.settings.tool_allowed_side_effects),
-                context=ToolContext(
-                    execution_id=execution.id,
-                    exploration_id=plan.exploration.id,
-                    idea_id=plan.idea.id if plan.idea else None,
-                ),
-            )
-            ctx = AgentContext(
-                exploration=exploration_view,
-                idea=idea_view,
-                evidence=evidence_views,
-                prior_analyses=prior_views,
-                research_question=plan.research_question,
-                llm=llm,
-                llm_model=model,
-                tools=tools,
-                prompt=prompt,
-            )
-            draft = plan.agent.run(ctx)
-            self._validate_draft(draft, plan.stage, {e.id for e in evidence})
-            self._persist_success(plan, stage_run, execution, draft, llm, tools)
-            self.session.commit()
-        except Exception as exc:
-            self.session.rollback()
-            self._persist_failure(plan, stage_run.id, execution.id, exc)
+    def _start(self, actor: Actor, plan: _Plan) -> StageRun:
+        stage_run = self._queue(actor, plan)
+        if self.settings.execution_mode == "sync":
+            self.execute(stage_run.id, worker_id="sync")
         self.session.refresh(stage_run)
         return stage_run
 
-    def _open_records(
-        self, actor: Actor, plan: _Plan, evidence: list[Evidence], prior: list[Analysis]
-    ) -> tuple[StageRun, Execution]:
+    def _queue(self, actor: Actor, plan: _Plan) -> StageRun:
         idea_id = plan.idea.id if plan.idea else None
         now = utcnow()
         if plan.trigger is not StageRunTrigger.INITIAL:
             self._supersede_from(plan.exploration.id, idea_id, plan.stage, now)
-        input_snapshot = {
-            "evidence_ids": [str(e.id) for e in evidence],
-            # 渡した Evidence と、その時点の状態（E-01。入力は active だけ）
-            "evidence": [
-                {"id": str(e.id), "status": EvidenceStatus.ACTIVE.value} for e in evidence
-            ],
-            "analysis_ids": [str(a.id) for a in prior],
-            "research_question": plan.research_question,
-        }
         stage_run = StageRun(
             organization_id=plan.exploration.organization_id,
             exploration_id=plan.exploration.id,
@@ -416,35 +499,37 @@ class StageRunService:
             research_question=plan.research_question,
             triggered_by_actor_id=actor.id,
             triggered_by_actor_type=actor.actor_type,
-            status=RunStatus.RUNNING.value,
-            input_snapshot=input_snapshot,
+            status=RunStatus.QUEUED.value,
+            input_snapshot={"research_question": plan.research_question},
             started_at=now,
         )
         self.stage_runs.add(stage_run)
-        employee = plan.employee
-        provider, model = resolve_llm_config(employee.llm_config, self.settings.llm_provider)
-        prompt_hash = None
-        if employee.prompt_key and employee.prompt_version:
-            prompt_hash = load_prompt(employee.prompt_key, employee.prompt_version).sha256
-        execution = Execution(
-            organization_id=stage_run.organization_id,
-            stage_run_id=stage_run.id,
-            ai_employee_id=employee.id,
-            idea_id=idea_id,
-            ai_employee_version=employee.version,
-            ai_employee_snapshot=_employee_snapshot(employee),
-            implementation_key=plan.agent.implementation_key,
-            prompt_key=employee.prompt_key,
-            prompt_version=employee.prompt_version,
-            prompt_hash=prompt_hash,
-            llm_provider=provider,
-            llm_model=model,
-            code_version=self.settings.code_version or detect_code_version(),
-            status=RunStatus.RUNNING.value,
-            input=input_snapshot,
-            started_at=now,
-        )
-        self.executions.add(execution)
+        for member in plan.members:
+            employee = member.employee
+            provider, model = resolve_llm_config(employee.llm_config, self.settings.llm_provider)
+            prompt_hash = None
+            if employee.prompt_key and employee.prompt_version:
+                prompt_hash = load_prompt(employee.prompt_key, employee.prompt_version).sha256
+            self.executions.add(
+                Execution(
+                    organization_id=stage_run.organization_id,
+                    stage_run_id=stage_run.id,
+                    ai_employee_id=employee.id,
+                    assignment_role=member.role.value,
+                    idea_id=idea_id,
+                    ai_employee_version=employee.version,
+                    ai_employee_snapshot=_employee_snapshot(employee),
+                    implementation_key=member.agent.implementation_key,
+                    prompt_key=employee.prompt_key,
+                    prompt_version=employee.prompt_version,
+                    prompt_hash=prompt_hash,
+                    llm_provider=provider,
+                    llm_model=model,
+                    code_version=self.settings.code_version or detect_code_version(),
+                    status=RunStatus.QUEUED.value,
+                    input={},
+                )
+            )
         action = "send_back" if plan.trigger is StageRunTrigger.SEND_BACK else "started"
         record_audit(
             self.session,
@@ -460,6 +545,7 @@ class StageRunService:
                 "rerun_of_id": plan.rerun_of_id,
                 "sent_back_from_id": plan.sent_back_from_id,
                 "reason": plan.reason,
+                "ai_employee_ids": [m.employee.id for m in plan.members],
             },
         )
         try:
@@ -467,7 +553,7 @@ class StageRunService:
         except IntegrityError as exc:  # 同時実行で「最新試行は1つ」の一意制約に違反した場合
             self.session.rollback()
             raise InvalidStateError("a concurrent run for this stage already exists") from exc
-        return stage_run, execution
+        return stage_run
 
     def _supersede_from(
         self, exploration_id: UUID, idea_id: UUID | None, stage: StageDefinition, now: Any
@@ -478,35 +564,158 @@ class StageRunService:
                 run.superseded_at = now
         self.session.flush()
 
-    def _evidence_for(self, plan: _Plan) -> list[Evidence]:
+    # ------------------------------------------------------------------ 実行（ワーカー）
+
+    def execute(self, stage_run_id: UUID, worker_id: str) -> None:
+        """queued の stage_run を実行する。primary を先に、続いて secondary を実行する。"""
+        stage_run = self.stage_runs.get_or_raise(stage_run_id)
+        self.session.refresh(stage_run, with_for_update=True)
+        if stage_run.status != RunStatus.QUEUED.value:
+            self.session.rollback()
+            return
+        now = utcnow()
+        stage_run.status = RunStatus.RUNNING.value
+        stage_run.claimed_at = now
+        stage_run.heartbeat_at = now
+        stage_run.worker_id = worker_id
+        exploration = self.explorations.get_or_raise(stage_run.exploration_id)
+        idea = self.ideas.get(stage_run.idea_id) if stage_run.idea_id else None
+        stage = get_stage(stage_run.stage_key)
+        evidence = self._evidence_for(exploration, idea)
+        prior = self._prior_analyses_for(exploration, idea, stage)
+        stage_run.input_snapshot = {
+            "evidence_ids": [str(e.id) for e in evidence],
+            # 渡した Evidence と、その時点の状態（E-01。入力は active だけ）
+            "evidence": [
+                {"id": str(e.id), "status": EvidenceStatus.ACTIVE.value} for e in evidence
+            ],
+            "analysis_ids": [str(a.id) for a in prior],
+            "research_question": stage_run.research_question,
+        }
+        self.session.commit()
+
+        deadline = now + timedelta(seconds=self.settings.stage_run_timeout_seconds)
+        primary_status = RunStatus.FAILED
+        for execution in self.executions_for(stage_run.id):
+            status = self._execute_one(
+                stage_run, execution, exploration, idea, stage, evidence, prior, deadline
+            )
+            if execution.assignment_role == StageAssignmentRole.PRIMARY.value:
+                primary_status = status
+        self._finish(stage_run.id, primary_status)
+
+    def _execute_one(
+        self,
+        stage_run: StageRun,
+        execution: Execution,
+        exploration: Exploration,
+        idea: Idea | None,
+        stage: StageDefinition,
+        evidence: list[Evidence],
+        prior: list[Analysis],
+        deadline: datetime,
+    ) -> RunStatus:
+        execution_id = execution.id
+        self.session.refresh(execution)
+        if execution.status != RunStatus.QUEUED.value:  # 取り消し済み
+            return RunStatus(execution.status)
+        guard = _RunGuard(self.session, stage_run.id, deadline)
+        try:
+            guard.check()
+        except (ExecutionCancelledError, TimeoutError) as exc:
+            return self._persist_failure(execution_id, exc)
+        employee = self.employees.get_or_raise(execution.ai_employee_id)
+        execution.status = RunStatus.RUNNING.value
+        execution.started_at = utcnow()
+        execution.input = stage_run.input_snapshot
+        self.session.commit()
+        try:
+            agent = self._agent_for(employee)
+            _, model = resolve_llm_config(employee.llm_config, self.settings.llm_provider)
+            llm = TrackingLLMClient(
+                self.llm_client_factory(execution.llm_provider or self.settings.llm_provider),
+                guard=guard,
+                call_timeout_seconds=self.settings.llm_call_timeout_seconds,
+            )
+            prompt = load_prompt(execution.prompt_key or "", execution.prompt_version or "")
+            tools = ToolBox(
+                self.tool_registry,
+                allowed_tools=list(employee.allowed_tools),
+                allowed_side_effects=list(self.settings.tool_allowed_side_effects),
+                context=ToolContext(
+                    execution_id=execution.id,
+                    exploration_id=exploration.id,
+                    idea_id=idea.id if idea else None,
+                ),
+                guard=guard,
+            )
+            ctx = AgentContext(
+                exploration=ExplorationView.model_validate(exploration, from_attributes=True),
+                idea=IdeaView.model_validate(idea, from_attributes=True) if idea else None,
+                evidence=[EvidenceView.model_validate(e, from_attributes=True) for e in evidence],
+                prior_analyses=[
+                    AnalysisView.model_validate(a, from_attributes=True) for a in prior
+                ],
+                research_question=stage_run.research_question,
+                llm=llm,
+                llm_model=model,
+                tools=tools,
+                prompt=prompt,
+            )
+            draft = agent.run(ctx)
+            self._validate_draft(draft, stage, {e.id for e in evidence})
+            self._persist_success(stage_run, execution, employee, agent, draft, llm, tools)
+            # 確定の直前に取り消されていないことを確認する（取り消し済みなら保存しない）
+            locked_status = self.session.execute(
+                select(StageRun.status).where(StageRun.id == stage_run.id).with_for_update()
+            ).scalar_one()
+            if locked_status != RunStatus.RUNNING.value:
+                raise ExecutionCancelledError(f"stage run is {locked_status}")
+            self.session.commit()
+            return RunStatus.SUCCEEDED
+        except Exception as exc:
+            self.session.rollback()
+            return self._persist_failure(execution_id, exc)
+
+    def _evidence_for(self, exploration: Exploration, idea: Idea | None) -> list[Evidence]:
         # 通常の新規Analysisに渡すのは active の Evidence だけ（E-01）。
         # superseded（更新版がある）・retracted・purged は渡さない。
         criteria = [
-            Evidence.exploration_id == plan.exploration.id,
+            Evidence.exploration_id == exploration.id,
             self.evidence.status_criteria([EvidenceStatus.ACTIVE]),
         ]
-        if plan.idea is None:
+        if idea is None:
             criteria.append(Evidence.idea_id.is_(None))
         else:
-            criteria.append(Evidence.idea_id.is_(None) | (Evidence.idea_id == plan.idea.id))
+            criteria.append(Evidence.idea_id.is_(None) | (Evidence.idea_id == idea.id))
         return list(self.evidence.list_where(*criteria))
 
-    def _prior_analyses_for(self, plan: _Plan) -> list[Analysis]:
-        if plan.idea is None:
+    def _prior_analyses_for(
+        self, exploration: Exploration, idea: Idea | None, stage: StageDefinition
+    ) -> list[Analysis]:
+        """前段の成功した試行の primary の分析（secondary は後続の入力に使わない。7章）。"""
+        if idea is None:
             return []
         result: list[Analysis] = []
-        if plan.idea.origin_type == OriginType.AI.value and plan.idea.origin_analysis_id:
-            origin = self.analyses.get(plan.idea.origin_analysis_id)
+        if idea.origin_type == OriginType.AI.value and idea.origin_analysis_id:
+            origin = self.analyses.get(idea.origin_analysis_id)
             if origin is not None:
                 result.append(origin)
-        earlier = {s.key for s in STAGES if s.order < plan.stage.order}
+        earlier = {s.key for s in STAGES if s.order < stage.order}
         runs = [
             r
-            for r in self.stage_runs.current_all(plan.exploration.id, plan.idea.id)
+            for r in self.stage_runs.current_all(exploration.id, idea.id)
             if r.stage_key in earlier and r.status == RunStatus.SUCCEEDED.value
         ]
         if runs:
-            stmt = select(Analysis).where(Analysis.stage_run_id.in_([r.id for r in runs]))
+            stmt = (
+                select(Analysis)
+                .join(Execution, Execution.id == Analysis.execution_id)
+                .where(
+                    Analysis.stage_run_id.in_([r.id for r in runs]),
+                    Execution.assignment_role == StageAssignmentRole.PRIMARY.value,
+                )
+            )
             result.extend(self.session.scalars(stmt.order_by(Analysis.created_at)).all())
         return result
 
@@ -530,24 +739,27 @@ class StageRunService:
 
     def _persist_success(
         self,
-        plan: _Plan,
         stage_run: StageRun,
         execution: Execution,
+        employee: AIEmployee,
+        agent: Agent,
         draft: AnalysisDraft,
         llm: TrackingLLMClient,
         tools: ToolBox,
     ) -> None:
-        idea_id = plan.idea.id if plan.idea else None
-        previous = self.analyses.latest_for_stage(plan.exploration.id, idea_id, plan.stage.key)
+        previous = self.analyses.latest_for_stage(
+            stage_run.exploration_id, stage_run.idea_id, stage_run.stage_key, employee.id
+        )
         analysis = self.analyses.add(
             Analysis(
-                organization_id=plan.exploration.organization_id,
-                exploration_id=plan.exploration.id,
-                idea_id=idea_id,
+                organization_id=stage_run.organization_id,
+                exploration_id=stage_run.exploration_id,
+                idea_id=stage_run.idea_id,
                 stage_run_id=stage_run.id,
                 execution_id=execution.id,
-                stage_key=plan.stage.key,
-                schema_version=plan.agent.output_schema_version,
+                ai_employee_id=employee.id,
+                stage_key=stage_run.stage_key,
+                schema_version=agent.output_schema_version,
                 version_no=(previous.version_no + 1) if previous else 1,
                 supersedes_id=previous.id if previous else None,
                 summary=draft.summary,
@@ -579,30 +791,35 @@ class StageRunService:
                     )
                 )
         created_ideas: list[Idea] = []
-        for candidate in draft.idea_candidates:
-            idea = self.ideas.add(
-                Idea(
-                    organization_id=plan.exploration.organization_id,
-                    exploration_id=plan.exploration.id,
-                    title=candidate.title,
-                    summary=candidate.summary,
-                    problem=candidate.problem,
-                    origin_type=OriginType.AI.value,
-                    origin_analysis_id=analysis.id,
-                    adoption_status=AdoptionStatus.CANDIDATE.value,
+        # Idea 候補は primary の出力だけから作る（secondary は追加の視点の記録だけ）
+        if execution.assignment_role == StageAssignmentRole.PRIMARY.value:
+            for candidate in draft.idea_candidates:
+                idea = self.ideas.add(
+                    Idea(
+                        organization_id=stage_run.organization_id,
+                        exploration_id=stage_run.exploration_id,
+                        title=candidate.title,
+                        summary=candidate.summary,
+                        problem=candidate.problem,
+                        origin_type=OriginType.AI.value,
+                        origin_analysis_id=analysis.id,
+                        adoption_status=AdoptionStatus.CANDIDATE.value,
+                    )
                 )
-            )
-            created_ideas.append(idea)
-            record_audit(
-                self.session,
-                organization_id=idea.organization_id,
-                entity_type="idea",
-                entity_id=idea.id,
-                action="created",
-                execution_id=execution.id,
-                after={"title": idea.title, "origin_type": "ai", "adoption_status": "candidate"},
-            )
-        now = utcnow()
+                created_ideas.append(idea)
+                record_audit(
+                    self.session,
+                    organization_id=idea.organization_id,
+                    entity_type="idea",
+                    entity_id=idea.id,
+                    action="created",
+                    execution_id=execution.id,
+                    after={
+                        "title": idea.title,
+                        "origin_type": "ai",
+                        "adoption_status": "candidate",
+                    },
+                )
         execution.status = RunStatus.SUCCEEDED.value
         execution.llm_model = llm.last_model or execution.llm_model
         execution.output = to_jsonable(
@@ -613,58 +830,138 @@ class StageRunService:
             }
         )
         execution.usage = {**llm.usage.model_dump(), "llm_calls": llm.call_count}
-        execution.finished_at = now
-        stage_run.status = RunStatus.SUCCEEDED.value
-        stage_run.finished_at = now
+        execution.finished_at = utcnow()
         self.session.flush()
-        if plan.idea is not None:
-            self._recompute_current_stage(plan.idea)
-        record_audit(
-            self.session,
-            organization_id=stage_run.organization_id,
-            entity_type="stage_run",
-            entity_id=stage_run.id,
-            action="succeeded",
-            execution_id=execution.id,
-        )
 
-    def _persist_failure(
-        self, plan: _Plan, stage_run_id: UUID, execution_id: UUID, exc: BaseException
-    ) -> None:
-        stage_run = self.stage_runs.get_or_raise(stage_run_id)
+    def _persist_failure(self, execution_id: UUID, exc: BaseException) -> RunStatus:
         execution = self.executions.get_or_raise(execution_id)
+        self.session.refresh(execution, with_for_update=True)
+        if execution.status not in ACTIVE_RUN_STATUSES:
+            # 取り消し・heartbeat 途絶ですでに確定した状態は上書きしない
+            self.session.commit()
+            return RunStatus(execution.status)
         now = utcnow()
-        error_type = classify_error(exc)
-        execution.status = RunStatus.FAILED.value
-        execution.error_type = error_type.value
-        execution.error_message = str(exc)[:MAX_ERROR_MESSAGE] or exc.__class__.__name__
-        execution.error_detail = {"exception_class": exc.__class__.__name__}
+        if isinstance(exc, ExecutionCancelledError):
+            status = RunStatus.CANCELLED
+        else:
+            status = RunStatus.FAILED
+            error_type = classify_error(exc)
+            execution.error_type = error_type.value
+            execution.error_message = str(exc)[:MAX_ERROR_MESSAGE] or exc.__class__.__name__
+            execution.error_detail = {"exception_class": exc.__class__.__name__}
+        execution.status = status.value
         execution.finished_at = now
-        stage_run.status = RunStatus.FAILED.value
-        stage_run.finished_at = now
-        if plan.idea is not None:
-            idea = self.ideas.get(plan.idea.id)
-            if idea is not None:
-                self._recompute_current_stage(idea)
+        self.session.commit()
+        return status
+
+    def _finish(self, stage_run_id: UUID, primary_status: RunStatus) -> None:
+        """stage_run の状態は primary の結果で決まる（secondary の失敗では失敗にしない）。"""
+        stage_run = self.stage_runs.get_or_raise(stage_run_id)
+        self.session.refresh(stage_run, with_for_update=True)
+        if stage_run.status != RunStatus.RUNNING.value:  # 取り消し済み・途絶として処理済み
+            self.session.commit()
+            return
+        status = RunStatus.SUCCEEDED if primary_status is RunStatus.SUCCEEDED else RunStatus.FAILED
+        stage_run.status = status.value
+        stage_run.finished_at = utcnow()
+        self._recompute_idea_stage(stage_run)
+        primary = self.executions_for(stage_run.id)[0]
         record_audit(
             self.session,
             organization_id=stage_run.organization_id,
             entity_type="stage_run",
             entity_id=stage_run.id,
-            action="failed",
-            execution_id=execution.id,
-            after={"error_type": error_type.value},
+            action=status.value,
+            execution_id=primary.id,
+            after={"error_type": primary.error_type} if primary.error_type else None,
         )
         self.session.commit()
 
+    def _recompute_idea_stage(self, stage_run: StageRun) -> None:
+        if stage_run.idea_id is None:
+            return
+        idea = self.ideas.get(stage_run.idea_id)
+        if idea is not None:
+            self._recompute_current_stage(idea)
+
     def _recompute_current_stage(self, idea: Idea) -> None:
         """current_stage_key = 最新（未 supersede）かつ成功した試行のうち最も後ろのステージ。"""
+        self.session.flush()
         succeeded = [
             get_stage(r.stage_key)
             for r in self.stage_runs.current_all(idea.exploration_id, idea.id)
             if r.status == RunStatus.SUCCEEDED.value
         ]
         idea.current_stage_key = max(succeeded, key=lambda s: s.order).key if succeeded else None
+
+
+# ---------------------------------------------------------------------- ワーカー用の操作
+
+
+def claim_next_queued(session: Session) -> UUID | None:
+    """最も古い queued の stage_run を1つ選ぶ（他のワーカーがロック中のものは飛ばす）。"""
+    stmt = (
+        select(StageRun.id)
+        .where(StageRun.status == RunStatus.QUEUED.value)
+        .order_by(StageRun.started_at, StageRun.id)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    )
+    stage_run_id = session.execute(stmt).scalar_one_or_none()
+    session.rollback()  # ロックは execute() の中で取り直す
+    return stage_run_id
+
+
+def touch_heartbeat(session: Session, stage_run_id: UUID) -> None:
+    stage_run = session.get(StageRun, stage_run_id)
+    if stage_run is not None and stage_run.status == RunStatus.RUNNING.value:
+        stage_run.heartbeat_at = utcnow()
+    session.commit()
+
+
+def fail_stale_runs(session: Session, heartbeat_timeout_seconds: float) -> list[UUID]:
+    """heartbeat が途絶えた running の実行を failed にする（自動の再実行はしない）。"""
+    threshold = utcnow() - timedelta(seconds=heartbeat_timeout_seconds)
+    stale = session.scalars(
+        select(StageRun)
+        .where(StageRun.status == RunStatus.RUNNING.value, StageRun.heartbeat_at < threshold)
+        .with_for_update(skip_locked=True)
+    ).all()
+    now = utcnow()
+    for stage_run in stale:
+        stage_run.status = RunStatus.FAILED.value
+        stage_run.finished_at = now
+        executions = session.scalars(
+            select(Execution).where(Execution.stage_run_id == stage_run.id)
+        ).all()
+        for execution in executions:
+            if execution.status in ACTIVE_RUN_STATUSES:
+                execution.status = RunStatus.FAILED.value
+                execution.error_type = ErrorType.UNEXPECTED.value
+                execution.error_message = HEARTBEAT_LOST_MESSAGE
+                execution.finished_at = now
+        if stage_run.idea_id is not None:
+            idea = session.get(Idea, stage_run.idea_id)
+            if idea is not None:
+                session.flush()
+                succeeded = [
+                    get_stage(r.stage_key)
+                    for r in StageRunRepository(session).current_all(idea.exploration_id, idea.id)
+                    if r.status == RunStatus.SUCCEEDED.value
+                ]
+                idea.current_stage_key = (
+                    max(succeeded, key=lambda s: s.order).key if succeeded else None
+                )
+        record_audit(
+            session,
+            organization_id=stage_run.organization_id,
+            entity_type="stage_run",
+            entity_id=stage_run.id,
+            action="failed",
+            after={"error_type": ErrorType.UNEXPECTED.value, "reason": HEARTBEAT_LOST_MESSAGE},
+        )
+    session.commit()
+    return [r.id for r in stale]
 
 
 def _employee_snapshot(employee: AIEmployee) -> dict[str, Any]:

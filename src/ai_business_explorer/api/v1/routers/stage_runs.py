@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from ai_business_explorer.api.v1.deps import (
     AgentRegistryDep,
+    MemberDep,
     SessionDep,
     SettingsDep,
     ToolRegistryDep,
@@ -48,6 +49,23 @@ def get_stage_run(
 ) -> object:
     service = StageRunService(session, settings, agents, tools)
     return stage_run_detail(service, service.get(stage_run_id))
+
+
+@router.post(
+    "/stage-runs/{stage_run_id}/cancel",
+    response_model=StageRunDetailOut,
+    summary="queued / running の実行を取り消す（member 以上の人間のみ）",
+)
+def cancel_stage_run(
+    stage_run_id: UUID,
+    actor: MemberDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    agents: AgentRegistryDep,
+    tools: ToolRegistryDep,
+) -> object:
+    service = StageRunService(session, settings, agents, tools)
+    return stage_run_detail(service, service.cancel(actor, stage_run_id))
 
 
 @router.get("/executions/{execution_id}", response_model=ExecutionOut)

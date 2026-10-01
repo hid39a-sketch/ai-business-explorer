@@ -69,9 +69,20 @@ class StageRunTrigger(StrEnum):
 
 
 class RunStatus(StrEnum):
+    """stage_runs / executions の状態。queued → running → succeeded / failed。
+
+    queued と running は人間が取り消せる（cancelled）。自動の再実行はしない。
+    """
+
+    QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+# まだ終わっていない状態（取り消せる・二重起動を防ぐ対象）
+ACTIVE_RUN_STATUSES: frozenset[RunStatus] = frozenset({RunStatus.QUEUED, RunStatus.RUNNING})
 
 
 class ErrorType(StrEnum):
