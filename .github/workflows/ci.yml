@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: abe
+          POSTGRES_PASSWORD: abe
+          POSTGRES_DB: ai_business_explorer
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U abe -d ai_business_explorer"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql+psycopg://abe:abe@localhost:5432/ai_business_explorer
+      TEST_DATABASE_URL: postgresql+psycopg://abe:abe@localhost:5432/ai_business_explorer_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Ruff (lint)
+        run: uv run ruff check .
+      - name: Ruff (format)
+        run: uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy
+      - name: Create test database
+        run: PGPASSWORD=abe psql -h localhost -U abe -d ai_business_explorer -c "CREATE DATABASE ai_business_explorer_test"
+      - name: Migrations (upgrade / check / downgrade / upgrade)
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - name: Seed (idempotent)
+        run: |
+          uv run python -m ai_business_explorer.seed
+          uv run python -m ai_business_explorer.seed
+      - name: pytest
+        run: uv run pytest
