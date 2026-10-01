@@ -1,4 +1,4 @@
-.PHONY: setup up down migrate seed run test lint format typecheck check
+.PHONY: setup up down migrate seed run worker test lint format typecheck check
 
 setup:  ## 依存関係をインストール
 	uv sync
@@ -17,6 +17,9 @@ seed:  ## 初期データ（human actor / system actor / Fake AI社員2体）
 
 run:  ## API サーバー（Swagger: http://localhost:8000/docs）
 	uv run uvicorn ai_business_explorer.main:app --reload
+
+worker:  ## ステージ実行のワーカー（queued の実行を処理する）
+	uv run python -m ai_business_explorer.worker
 
 test:
 	uv run pytest

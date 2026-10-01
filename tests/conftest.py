@@ -1,7 +1,7 @@
 """テスト共通設定。本物の PostgreSQL（TEST_DATABASE_URL）を使う。"""
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 from uuid import UUID
 
@@ -13,11 +13,17 @@ from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from ai_business_explorer.config import Settings
+from ai_business_explorer.domain.ids import uuid7
 from ai_business_explorer.infrastructure.db.base import Base
-from ai_business_explorer.infrastructure.db.models import Actor
+from ai_business_explorer.infrastructure.db.models import Actor, OrganizationMembership
 from ai_business_explorer.infrastructure.db.session import build_engine, build_session_factory
 from ai_business_explorer.main import create_app
-from ai_business_explorer.seed import DEFAULT_HUMAN_ACTOR_ID, SYSTEM_ACTOR_ID, seed
+from ai_business_explorer.seed import (
+    DEFAULT_HUMAN_ACTOR_ID,
+    DEFAULT_ORGANIZATION_ID,
+    SYSTEM_ACTOR_ID,
+    seed,
+)
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -28,7 +34,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 @pytest.fixture(scope="session")
 def settings() -> Settings:
-    return Settings(app_env="test", database_url=TEST_DATABASE_URL, code_version="test-sha")
+    return Settings(
+        app_env="test",
+        database_url=TEST_DATABASE_URL,
+        code_version="test-sha",
+        execution_mode="sync",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -107,7 +118,10 @@ class Api:
         self.client = client
         self.h = headers(actor_id)
 
-    def post(self, path: str, body: dict[str, Any] | None = None, expect: int = 201) -> Any:
+    def post(self, path: str, body: dict[str, Any] | None = None, expect: int | None = None) -> Any:
+        if expect is None:
+            # ステージ実行の受付は 202（第2回仕様 9章）。それ以外の作成は 201
+            expect = 202 if path.endswith(("/stage-runs", "/send-back")) else 201
         res = self.client.post(f"/api/v1{path}", json=body or {}, headers=self.h)
         assert res.status_code == expect, res.text
         return res.json()
@@ -165,3 +179,28 @@ def api(client: TestClient, human_id: UUID) -> Api:
 @pytest.fixture
 def system_api(client: TestClient, system_id: UUID) -> Api:
     return Api(client, system_id)
+
+
+def make_human(
+    session: Session, role: str | None, organization_id: UUID = DEFAULT_ORGANIZATION_ID
+) -> UUID:
+    actor = Actor(id=uuid7(), actor_type="human", display_name=f"{role or 'no role'} user")
+    session.add(actor)
+    session.flush()
+    if role is not None:
+        session.add(
+            OrganizationMembership(
+                organization_id=organization_id,
+                actor_id=actor.id,
+                actor_type="human",
+                role=role,
+            )
+        )
+    session.commit()
+    return actor.id
+
+
+@pytest.fixture
+def as_role(client: TestClient, session: Session) -> Callable[[str], Api]:
+    """指定したロールを持つ人間 actor として API を呼ぶ。"""
+    return lambda role: Api(client, make_human(session, role))

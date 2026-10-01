@@ -78,7 +78,7 @@ def list_ideas(exploration_id: UUID, session: SessionDep, page: PageDep) -> obje
 @router.post(
     "/{exploration_id}/stage-runs",
     response_model=StageRunDetailOut,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="idea_generation ステージを実行・再実行する（member 以上の人間のみ）",
 )
 def run_idea_generation(

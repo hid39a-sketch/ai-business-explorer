@@ -14,39 +14,13 @@ from ai_business_explorer.api.v1.router import api_router, health
 from ai_business_explorer.api.v1.routers.stage_runs import list_stages
 from ai_business_explorer.domain.ids import uuid7
 from ai_business_explorer.infrastructure.db.models import (
-    Actor,
     Organization,
-    OrganizationMembership,
 )
 from ai_business_explorer.seed import DEFAULT_ORGANIZATION_ID
 from tests.api.test_rerun_send_back import _TestCompetitorResearcher
-from tests.conftest import Api
+from tests.conftest import Api, make_human
 
 ROLES = ["viewer", "member", "reviewer", "admin"]
-
-
-def _human(
-    session: Session, role: str | None, organization_id: UUID = DEFAULT_ORGANIZATION_ID
-) -> UUID:
-    actor = Actor(id=uuid7(), actor_type="human", display_name=f"{role or 'no role'} user")
-    session.add(actor)
-    session.flush()
-    if role is not None:
-        session.add(
-            OrganizationMembership(
-                organization_id=organization_id,
-                actor_id=actor.id,
-                actor_type="human",
-                role=role,
-            )
-        )
-    session.commit()
-    return actor.id
-
-
-@pytest.fixture
-def as_role(client: TestClient, session: Session) -> Callable[[str], Api]:
-    return lambda role: Api(client, _human(session, role))
 
 
 @pytest.fixture
@@ -116,12 +90,12 @@ def _ops() -> list[Operation]:
             _call("post", lambda s: f"/evidence/{s['evidence']['id']}/retract", {"reason": "r"}),
             200,
         ),
-        ("run stage", "member", _call("post", lambda s: f"{exp(s)}/stage-runs"), 201),
+        ("run stage", "member", _call("post", lambda s: f"{exp(s)}/stage-runs"), 202),
         (
             "rerun stage",
             "member",
             _call("post", lambda s: f"{idea(s)}/stage-runs", rerun_body),
-            201,
+            202,
         ),
         ("adopt idea", "reviewer", _call("post", lambda s: f"{candidate(s)}/adopt"), 200),
         ("reject idea", "reviewer", _call("post", lambda s: f"{candidate(s)}/reject"), 200),
@@ -219,7 +193,7 @@ def test_system_actor_cannot_use_the_api(system_api: Api, setup: dict[str, Any])
 def test_human_without_membership_is_rejected(
     client: TestClient, session: Session, setup: dict[str, Any]
 ) -> None:
-    api = Api(client, _human(session, None))
+    api = Api(client, make_human(session, None))
     api.get(f"/explorations/{setup['exp']['id']}", expect=403)
     api.post("/explorations", {"title": "x", "theme": "t"}, expect=403)
 
@@ -288,7 +262,7 @@ def other_org(session: Session) -> UUID:
 
 @pytest.fixture
 def other_admin(client: TestClient, session: Session, other_org: UUID) -> Api:
-    return Api(client, _human(session, "admin", other_org))
+    return Api(client, make_human(session, "admin", other_org))
 
 
 def test_other_organization_data_is_not_found(other_admin: Api, setup: dict[str, Any]) -> None:
@@ -326,6 +300,14 @@ def test_cannot_write_to_other_organization_data(other_admin: Api, setup: dict[s
     other_admin.post(
         f"/ideas/{idea_id}/human-decisions", {"decision": "go", "rationale": "r"}, expect=404
     )
+    other_admin.post(f"/stage-runs/{setup['run']['id']}/cancel", expect=404)
+    employee_id = setup["run"]["executions"][0]["ai_employee_id"]
+    other_admin.post(
+        "/stage-assignments",
+        {"stage_key": "market_research", "ai_employee_id": employee_id, "role": "secondary"},
+        expect=404,
+    )
+    assert other_admin.items("/stage-assignments") == []
 
 
 def test_new_data_belongs_to_the_actor_organization(other_admin: Api, other_org: UUID) -> None:

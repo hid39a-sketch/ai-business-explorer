@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 
 from ai_business_explorer.infrastructure.db.models import (
     Actor,
+    AIEmployee,
     Evidence,
+    Execution,
     Exploration,
     HumanDecision,
     Idea,
@@ -210,3 +212,55 @@ def test_claim_evidence_link_rejects_dangling_claim_and_evidence(
             relation="supports",
         ),
     )
+
+
+def _execution(stage_run: StageRun, employee: AIEmployee, role: str) -> Execution:
+    return Execution(
+        organization_id=stage_run.organization_id,
+        stage_run_id=stage_run.id,
+        ai_employee_id=employee.id,
+        assignment_role=role,
+        ai_employee_version=1,
+        ai_employee_snapshot={},
+        implementation_key="idea_generator",
+        code_version="test",
+    )
+
+
+def test_stage_run_has_one_primary_and_each_employee_once(
+    session: Session, exploration: Exploration, human: Actor
+) -> None:
+    """primary は1つの実行に1つだけ、同じ AI社員は1回だけ（第2回仕様 7章）。"""
+    stage_run = StageRun(
+        organization_id=exploration.organization_id,
+        exploration_id=exploration.id,
+        stage_key="idea_generation",
+        attempt_no=1,
+        trigger="initial",
+        triggered_by_actor_id=human.id,
+        triggered_by_actor_type="human",
+        started_at=datetime.now(UTC),
+    )
+    session.add(stage_run)
+    session.commit()
+    assert stage_run.status == "queued"
+    ig = session.query(AIEmployee).filter_by(key="idea_generator").one()
+    other = AIEmployee(
+        organization_id=exploration.organization_id,
+        key="ig_b",
+        name="b",
+        role="r",
+        stage_key="idea_generation",
+        llm_config={},
+        allowed_tools=[],
+        status="active",
+        version=1,
+    )
+    session.add(other)
+    session.add(_execution(stage_run, ig, "primary"))
+    session.commit()
+    _assert_rejected(session, lambda: _execution(stage_run, other, "primary"))
+    _assert_rejected(session, lambda: _execution(stage_run, ig, "secondary"))
+    _assert_rejected(session, lambda: _execution(stage_run, other, "observer"))
+    session.add(_execution(stage_run, other, "secondary"))
+    session.commit()

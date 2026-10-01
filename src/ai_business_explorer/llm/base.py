@@ -8,6 +8,8 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
+from ai_business_explorer.domain.execution import CallGuard
+
 
 class LLMError(Exception):
     """LLM 呼び出しの失敗（プロバイダー障害、未対応プロバイダー、応答不正など）。"""
@@ -42,6 +44,8 @@ class LLMRequest(BaseModel):
     response_schema: dict[str, Any] | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    # 1回の呼び出しの上限秒数（R-20）。実際のプロバイダーのクライアントが守る。
+    timeout_seconds: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -63,10 +67,20 @@ class LLMClient(Protocol):
 
 
 class TrackingLLMClient:
-    """任意の LLMClient を包み、使用量と使用モデルを集計する（実行記録に保存するため）。"""
+    """任意の LLMClient を包み、使用量と使用モデルを集計する（実行記録に保存するため）。
 
-    def __init__(self, inner: LLMClient) -> None:
+    guard があれば呼び出しの前に確認し、call_timeout_seconds を各呼び出しに付ける。
+    """
+
+    def __init__(
+        self,
+        inner: LLMClient,
+        guard: CallGuard | None = None,
+        call_timeout_seconds: float | None = None,
+    ) -> None:
         self._inner = inner
+        self._guard = guard
+        self._call_timeout_seconds = call_timeout_seconds
         self.usage = LLMUsage()
         self.call_count = 0
         self.last_model: str | None = None
@@ -76,6 +90,10 @@ class TrackingLLMClient:
         return self._inner.provider
 
     def complete(self, request: LLMRequest) -> LLMResponse:
+        if self._guard is not None:
+            self._guard.check()
+        if self._call_timeout_seconds is not None and request.timeout_seconds is None:
+            request = request.model_copy(update={"timeout_seconds": self._call_timeout_seconds})
         response = self._inner.complete(request)
         self.usage = self.usage + response.usage
         self.call_count += 1

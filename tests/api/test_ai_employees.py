@@ -101,6 +101,17 @@ def test_new_employee_can_be_added_and_executed_for_a_new_stage_definition(api: 
             allowed_tools=[],
         ),
     )
+    # primary の割り当てが無効な社員のままなら、別の社員に勝手に切り替えずに止める
+    api.post(f"/explorations/{exp['id']}/stage-runs", {}, expect=409)
+    # 担当の付け替え（admin）
+    current = api.items("/stage-assignments?stage_key=idea_generation")
+    assert [a["ai_employee_id"] for a in current] == [ig["id"]]
+    res = api.client.delete(f"/api/v1/stage-assignments/{current[0]['id']}", headers=api.h)
+    assert res.status_code == 204
+    api.post(
+        "/stage-assignments",
+        {"stage_key": "idea_generation", "ai_employee_id": second["id"], "role": "primary"},
+    )
     run = api.post(f"/explorations/{exp['id']}/stage-runs", {})
     assert run["status"] == "succeeded"
     assert run["executions"][0]["ai_employee_id"] == second["id"]

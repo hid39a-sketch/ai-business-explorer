@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     # 実行記録に残すコードバージョン。未設定なら git から取得を試みる。
     code_version: str | None = None
 
+    # ステージ実行の方式（第2回仕様 9章）。async：受付後にワーカーが実行する。
+    # sync：テストと Fake LLM 用。同じ API（202）のまま、応答の前に実行を終える。
+    execution_mode: Literal["async", "sync"] = "async"
+    # タイムアウト（R-20 の暫定値）。超えたら failed（timeout）。
+    stage_run_timeout_seconds: float = 600
+    llm_call_timeout_seconds: float = 120
+    # ワーカーの生存確認。heartbeat がこの時間より古い running の実行は failed にする。
+    worker_heartbeat_interval_seconds: float = 10
+    worker_heartbeat_timeout_seconds: float = 60
+    worker_poll_interval_seconds: float = 2
+
 
 @lru_cache
 def get_settings() -> Settings:

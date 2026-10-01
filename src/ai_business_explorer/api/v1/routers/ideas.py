@@ -93,7 +93,7 @@ def reject_idea(
 @router.post(
     "/{idea_id}/stage-runs",
     response_model=StageRunDetailOut,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="アイデア単位のステージを実行・再実行する（member 以上の人間のみ）",
 )
 def run_idea_stage(
@@ -112,7 +112,7 @@ def run_idea_stage(
 @router.post(
     "/{idea_id}/send-back",
     response_model=StageRunDetailOut,
-    status_code=status.HTTP_201_CREATED,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="前のステージへ差し戻して再実行する（reviewer 以上の人間のみ）",
 )
 def send_back(

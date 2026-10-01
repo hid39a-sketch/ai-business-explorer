@@ -12,6 +12,7 @@ from ai_business_explorer.domain.enums import (
     ExplorationStatus,
     HumanDecisionValue,
     ReviewDecision,
+    StageAssignmentRole,
 )
 
 ShortText = Field(min_length=1, max_length=200)
@@ -158,6 +159,8 @@ class ExplorationStageRunCommand(_Command):
     research_question: str | None = Field(default=None, max_length=2000)
     rerun_of_id: UUID | None = None
     ai_employee_id: UUID | None = None
+    # 副担当（secondary）。指定した AI 社員も同じ入力で実行する（ステージの状態には影響しない）
+    secondary_ai_employee_ids: list[UUID] = Field(default_factory=list, max_length=10)
 
 
 class IdeaStageRunCommand(ExplorationStageRunCommand):
@@ -169,6 +172,13 @@ class SendBackCommand(_Command):
     reason: str = Field(min_length=1, max_length=2000)
     research_question: str | None = Field(default=None, max_length=2000)
     ai_employee_id: UUID | None = None
+    secondary_ai_employee_ids: list[UUID] = Field(default_factory=list, max_length=10)
+
+
+class StageAssignmentCreate(_Command):
+    stage_key: str = Field(min_length=1, max_length=64)
+    ai_employee_id: UUID
+    role: StageAssignmentRole
 
 
 class HumanReviewCreate(_Command):

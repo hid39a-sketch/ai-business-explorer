@@ -13,6 +13,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from ai_business_explorer.domain.execution import CallGuard
+
 
 class ToolSideEffect(StrEnum):
     READ_ONLY = "read_only"
@@ -90,7 +92,9 @@ class ToolBox:
         allowed_tools: list[str],
         allowed_side_effects: list[ToolSideEffect],
         context: ToolContext,
+        guard: CallGuard | None = None,
     ) -> None:
+        self._guard = guard
         self._registry = registry
         self._allowed = frozenset(allowed_tools)
         self._allowed_side_effects = frozenset(allowed_side_effects)
@@ -98,6 +102,8 @@ class ToolBox:
         self.calls: list[ToolCallRecord] = []
 
     def call(self, name: str, tool_input: dict[str, Any]) -> ToolResult:
+        if self._guard is not None:
+            self._guard.check()  # 取り消し・タイムアウトなら以降の呼び出しを止める
         if name not in self._allowed:
             raise ToolNotAllowedError(f"tool '{name}' is not in allowed_tools")
         tool = self._registry.get(name)
