@@ -1,0 +1,149 @@
+from dataclasses import asdict
+from uuid import UUID
+
+from fastapi import APIRouter, status
+
+from ai_business_explorer.api.v1.deps import (
+    ActorDep,
+    AgentRegistryDep,
+    SessionDep,
+    SettingsDep,
+    ToolRegistryDep,
+)
+from ai_business_explorer.api.v1.routers.stage_runs import stage_run_detail
+from ai_business_explorer.api.v1.schemas import (
+    AnalysisOut,
+    EvidenceOut,
+    HumanDecisionOut,
+    IdeaOut,
+    ResearchStatusOut,
+    StageRunDetailOut,
+    StageRunOut,
+)
+from ai_business_explorer.application.analyses import AnalysisService
+from ai_business_explorer.application.commands import (
+    HumanDecisionCreate,
+    IdeaAdoptionCommand,
+    IdeaStageRunCommand,
+    IdeaUpdate,
+    SendBackCommand,
+)
+from ai_business_explorer.application.evidence import EvidenceService
+from ai_business_explorer.application.ideas import IdeaService
+from ai_business_explorer.application.reviews import DecisionService
+from ai_business_explorer.application.stage_runs import StageRunService
+from ai_business_explorer.infrastructure.db.models import Idea
+
+router = APIRouter(prefix="/ideas", tags=["ideas"])
+
+
+def idea_out(service: IdeaService, idea: Idea) -> IdeaOut:
+    out = IdeaOut.model_validate(idea)
+    out.research_status = ResearchStatusOut(**asdict(service.research_status(idea)))
+    return out
+
+
+@router.get("/{idea_id}", response_model=IdeaOut)
+def get_idea(idea_id: UUID, session: SessionDep) -> object:
+    service = IdeaService(session)
+    return idea_out(service, service.get(idea_id))
+
+
+@router.patch("/{idea_id}", response_model=IdeaOut, summary="Idea の詳細項目を更新する（人間のみ）")
+def update_idea(idea_id: UUID, body: IdeaUpdate, actor: ActorDep, session: SessionDep) -> object:
+    service = IdeaService(session)
+    return idea_out(service, service.update(actor, idea_id, body))
+
+
+@router.post("/{idea_id}/adopt", response_model=IdeaOut, summary="candidate → adopted（人間のみ）")
+def adopt_idea(
+    idea_id: UUID, body: IdeaAdoptionCommand, actor: ActorDep, session: SessionDep
+) -> object:
+    service = IdeaService(session)
+    return idea_out(service, service.adopt(actor, idea_id, body))
+
+
+@router.post(
+    "/{idea_id}/reject", response_model=IdeaOut, summary="candidate → rejected（人間のみ）"
+)
+def reject_idea(
+    idea_id: UUID, body: IdeaAdoptionCommand, actor: ActorDep, session: SessionDep
+) -> object:
+    service = IdeaService(session)
+    return idea_out(service, service.reject(actor, idea_id, body))
+
+
+@router.post(
+    "/{idea_id}/stage-runs",
+    response_model=StageRunDetailOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="アイデア単位のステージを実行・再実行する（人間のみ）",
+)
+def run_idea_stage(
+    idea_id: UUID,
+    body: IdeaStageRunCommand,
+    actor: ActorDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    agents: AgentRegistryDep,
+    tools: ToolRegistryDep,
+) -> object:
+    service = StageRunService(session, settings, agents, tools)
+    return stage_run_detail(service, service.run_idea_stage(actor, idea_id, body))
+
+
+@router.post(
+    "/{idea_id}/send-back",
+    response_model=StageRunDetailOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="前のステージへ差し戻して再実行する（人間のみ）",
+)
+def send_back(
+    idea_id: UUID,
+    body: SendBackCommand,
+    actor: ActorDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    agents: AgentRegistryDep,
+    tools: ToolRegistryDep,
+) -> object:
+    service = StageRunService(session, settings, agents, tools)
+    return stage_run_detail(service, service.send_back(actor, idea_id, body))
+
+
+@router.get("/{idea_id}/stage-runs", response_model=list[StageRunOut])
+def list_idea_stage_runs(
+    idea_id: UUID,
+    session: SessionDep,
+    settings: SettingsDep,
+    agents: AgentRegistryDep,
+    tools: ToolRegistryDep,
+) -> object:
+    return StageRunService(session, settings, agents, tools).list_for_idea(idea_id)
+
+
+@router.get("/{idea_id}/evidence", response_model=list[EvidenceOut])
+def list_idea_evidence(idea_id: UUID, session: SessionDep) -> object:
+    return EvidenceService(session).list_for_idea(idea_id)
+
+
+@router.get("/{idea_id}/analyses", response_model=list[AnalysisOut])
+def list_idea_analyses(idea_id: UUID, session: SessionDep) -> object:
+    return AnalysisService(session).list_for_idea(idea_id)
+
+
+@router.post(
+    "/{idea_id}/human-decisions",
+    response_model=HumanDecisionOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="人間による最終的な事業判断を記録する（人間のみ）",
+)
+def create_human_decision(
+    idea_id: UUID, body: HumanDecisionCreate, actor: ActorDep, session: SessionDep
+) -> object:
+    return DecisionService(session).create(actor, idea_id, body)
+
+
+@router.get("/{idea_id}/human-decisions", response_model=list[HumanDecisionOut])
+def list_human_decisions(idea_id: UUID, session: SessionDep) -> object:
+    return DecisionService(session).list_for_idea(idea_id)

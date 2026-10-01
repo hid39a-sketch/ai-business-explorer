@@ -1,0 +1,95 @@
+# Architecture
+
+## 目的と原則
+
+- AI社員を1人から多数へ増やしても壊れにくい基盤にする。
+- **Evidence / AI Analysis / Human Review / Human Decision を分離する。** AI の分析を事実として扱わず、AI の判断を最終決定として扱わない。
+- 人間が後から検証できるように、すべての実行についてバージョンと入力を記録する。
+- 第1回のスコープ外の機能は作らない（「Future Extension」に記録する）。
+
+## レイヤー構成
+
+```
+[Swagger / curl / pytest]
+        │  REST /api/v1（X-Actor-Id）
+        ▼
+api/v1/          ルーター、レスポンススキーマ、依存関係（操作者の解決）
+        │
+application/     ユースケース（サービス）。人間専用操作のガードはここ
+        │
+├─ domain/       列挙値、ステージ定義、ドメイン例外（フレームワーク非依存）
+├─ agents/       AI社員の実装（AgentContext のみに依存。DB・サービスには触れない）
+├─ llm/          LLMClient プロトコル、FakeLLMClient、使用量の集計
+├─ tools/        Tool プロトコル、レジストリ、許可リストと副作用ポリシー（実ツールなし）
+├─ prompts/      Prompt ファイル（<key>/<version>.md）とローダー
+└─ infrastructure/db/   SQLAlchemy モデル、Repository、セッション
+        ▼
+PostgreSQL 16
+```
+
+依存の方向は `api → application → (domain, agents, llm, tools, infrastructure)` です。`agents/` から `application/`・`infrastructure/`・`sqlalchemy` を import していないことは、テスト（`tests/unit/test_agents.py`）で検査しています。
+
+## AI社員の実行フロー（同期）
+
+1. 人間が API からステージ実行を起動する（自動で次のステージへは進まない）。
+2. 事前検証：Idea が `adopted` か、前のステージに成功した最新の試行があるか、担当 AI社員が `active` で実装があるか。
+3. `stage_runs` と `executions` を `running` で作成してコミットする。再実行・差し戻しの場合は、対象ステージ以降の最新試行に `superseded_at` を記録する。
+4. `AgentContext`（読み取り専用の入力、LLM、ToolBox、Prompt）を組み立てて AI社員を実行する。
+5. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、Idea 候補を出せるのは idea_generation だけか。
+6. 成功した場合：`analyses`、`analysis_evidence_links`、（idea_generation なら）`candidate` の Idea を1トランザクションで保存する。
+7. 失敗した場合：部分的な出力をロールバックし、別トランザクションで `failed` と `error_type` を記録する。API は 500 を返さず、`failed` の stage_run を返す。
+
+## 人間専用の操作（AI からの経路なし）
+
+| 操作 | アプリ層 | DB 層 |
+|---|---|---|
+| Human Review | `require_human` | 複合 FK（actor_id, actor_type）+ `CHECK (reviewer_actor_type = 'human')` |
+| Human Decision | `require_human` + 対象 Idea が `adopted` であること | 同上 |
+| ステージ実行・再実行・差し戻し | `require_human` | `stage_runs` に同様の複合 FK + CHECK |
+| Idea の採用・却下・更新 | `require_human` | （監査ログに記録） |
+| Evidence の登録・撤回 | `require_human` | `source_type` から `ai_generated` を CHECK で排除 |
+
+第1回は、書き込み API をすべて human actor に限定しています。
+
+## バージョン追跡
+
+| 対象 | 記録先 |
+|---|---|
+| AI社員の定義 | `ai_employees.version`（更新のたびに増える）と `executions.ai_employee_snapshot` |
+| Prompt | `executions.prompt_key / prompt_version / prompt_hash`（SHA-256） |
+| LLM | `executions.llm_provider / llm_model / usage` |
+| Tool | `executions.output.tool_calls`（name, version, side_effect） |
+| Analysis | `analyses.schema_version / version_no / supersedes_id` |
+| コード | `executions.code_version`（git SHA。取得できなければ `unknown`） |
+| 入力 | `stage_runs.input_snapshot`、`executions.input`（使った Evidence と Analysis の ID） |
+
+## 設計判断（第1回で確定したもの）
+
+| 判断 | 内容 |
+|---|---|
+| AI社員の正本 | DB（`ai_employees`）。コード実装は `implementation_key` で参照し、実装のない社員は実行できない |
+| Idea の詳細項目 | 人間だけが更新する。AI が書けるのは候補生成時の title / summary / problem だけ |
+| Idea の項目の型 | すべて自由記述テキスト。スコアは持たない |
+| 調査ステータス | 保存せず、`current_stage_key` と最新の stage_run から算出する |
+| レビュー | `analyses.review_status` は ReviewService だけが更新する。修正は `human_reviews.corrections` に入れ、AI Analysis 本体は不変 |
+| 監査ログ | 最小限（作成・更新・状態遷移・レビュー・決定・差し戻し） |
+| LLM・ツール呼び出しの明細 | Future Extension（第1回は executions に集約） |
+| ステージの進め方 | 1ステージずつ人間が API から実行する。自動連鎖しない |
+| Idea の初期状態 | AI 生成も人間作成も `candidate`。adopt / reject は人間だけ |
+| Human Decision の条件 | 対象 Idea が `adopted` のときだけ記録できる（`candidate` / `rejected` では 409） |
+
+## Future Extension
+
+第1回では実装していないもの：
+
+- 実際の LLM アダプター（`llm/adapters/`）とトークン使用量の実測
+- `llm_calls` / `tool_calls` の明細テーブル
+- 実ツール（Web Search、Patent Search、News、Financial Data、Internal DB / Knowledge Base）と、ツール経由の Evidence 自動登録
+- 残りの AI社員（CompetitorResearcher、TechnologyResearcher、PatentResearcher、MonetizationAnalyst、RiskAnalyst、BusinessAnalyst）
+- AI社員同士の相互検証
+- ステージの自動連鎖、ジョブキュー、非同期実行、タイムアウト制御、DAG・並列ステージ
+- 本格的な認証・権限（`api/v1/deps.py` の `get_actor` を差し替える）、レビュー画面
+- 評価軸・スコア・ランキング
+- Evidence のベクトル検索（pgvector）
+- 追記専用テーブルを DB トリガーで UPDATE / DELETE 禁止にする
+- CI でのシークレットスキャン・依存関係の自動更新

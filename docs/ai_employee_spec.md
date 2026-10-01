@@ -1,0 +1,66 @@
+# AI Employee Specification
+
+## 定義（DB：`ai_employees`、正本）
+
+| 項目 | 列 | 備考 |
+|---|---|---|
+| ID / 名前 / 役割 / 説明 / 目的 | `id` / `name` / `role` / `description` / `purpose` | |
+| 担当ステージ | `stage_key` | `human_review` には割り当てられない |
+| 実装 | `implementation_key` | コード側のレジストリのキー。NULL なら定義のみで、実行できない |
+| 使用モデル | `llm_config` | `{"provider": "fake", "model": "fake-model-v1"}`。第1回で実行できるのは fake のみ |
+| 使用ツール | `allowed_tools` | 許可リスト。第1回は本番用ツールがない |
+| 入力形式 / 出力形式 | `input_format` / `output_format` | JSON Schema。実装がある場合は省略すると自動で設定される |
+| Prompt | `prompt_key` / `prompt_version` | `prompts/<key>/<version>.md` |
+| ステータス | `status` | `draft` / `active` / `inactive`（削除はせず無効化する） |
+| バージョン | `version` | 更新のたびに +1。実行時のスナップショットは executions に保存 |
+
+API：`POST/GET /api/v1/ai-employees`、`GET/PATCH /api/v1/ai-employees/{id}`（書き込みは人間のみ）。
+
+## 実装（コード）
+
+```python
+class Agent(ABC):
+    implementation_key: ClassVar[str]  # ai_employees.implementation_key と対応
+    stage_key: ClassVar[str]  # 担当ステージ（DB 定義と一致が必要）
+    output_schema_version: ClassVar[str]  # analyses.schema_version に記録
+    input_model: ClassVar[type[BaseModel]]
+    output_model: ClassVar[type[BaseModel]]
+
+    def run(self, ctx: AgentContext) -> AnalysisDraft: ...
+```
+
+`AgentContext` で使えるのは次のものだけです。
+
+| 項目 | 内容 |
+|---|---|
+| 入力データ（読み取り専用） | `exploration`、`idea`、`evidence`、`prior_analyses`、`research_question` |
+| `llm` | 使用量とモデルが自動で集計される |
+| `tools` | 許可リストと副作用ポリシーを強制する |
+| `prompt` | key、version、本文、SHA-256 |
+
+AI社員は DB・Repository・サービスに触れられません。このため、Human Review、Human Decision、再実行、差し戻し、Idea の採否を起動することはできません。
+
+`AnalysisDraft` に含めるもの：
+- `summary`
+- `claims`（`kind` で根拠あり／推論／推測を区別。`evidence_based` は Evidence 参照が必須）
+- `data`（構造化出力）
+- `idea_candidates`（idea_generation のみ。AI が書けるのは title / summary / problem だけ）
+
+## 第1回の AI社員（Fake）
+
+| key | 担当ステージ | 内容 |
+|---|---|---|
+| `idea_generator` | idea_generation | テーマから Idea 候補を3件生成する（`candidate` で登録） |
+| `market_researcher` | market_research | Evidence ごとに `evidence_based` の主張を作り、根拠のない推論は `inference` として明示する |
+
+## AI社員の追加手順
+
+1. `src/ai_business_explorer/agents/employees/<name>.py` に `Agent` のサブクラスを作る
+2. `src/ai_business_explorer/prompts/<prompt_key>/v1.md` を作る
+3. `agents/registry.py` の `build_default_registry()` に登録する
+4. （Fake で動かす場合）`llm/fake.py` の `DEFAULT_RESPONDERS` に応答を追加し、テストを書く
+5. API（`POST /api/v1/ai-employees`）または seed で定義を登録し、`status=active` にする
+
+DB マイグレーションは不要です。AI 出力は `analyses.body`（JSONB）に保存し、`schema_version` で区別します。
+
+同じステージに有効な AI社員が複数いる場合は、ステージ実行時に `ai_employee_id` で指定します。
