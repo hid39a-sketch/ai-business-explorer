@@ -138,6 +138,37 @@ def test_human_decision(api: Api) -> None:
     api.post(f"/ideas/{idea['id']}/human-decisions", {"decision": "go"}, expect=422)
 
 
+def test_human_decision_requires_adopted_idea(api: Api) -> None:
+    exp = api.exploration()
+    candidate = api.post(f"/explorations/{exp['id']}/ideas", {"title": "候補"})
+    rejected = api.post(f"/explorations/{exp['id']}/ideas", {"title": "却下案"})
+    api.post(f"/ideas/{rejected['id']}/reject", {}, expect=200)
+    for idea in (candidate, rejected):
+        for decision in ("go", "no_go", "hold", "pivot"):
+            api.post(
+                f"/ideas/{idea['id']}/human-decisions",
+                {"decision": decision, "rationale": "判断"},
+                expect=409,
+            )
+        assert api.get(f"/ideas/{idea['id']}/human-decisions") == []
+
+    # AI 生成の candidate も同様に、採用されるまで判断を記録できない
+    run = api.post(f"/explorations/{exp['id']}/stage-runs", {})
+    ai_idea_id = run["executions"][0]["output"]["idea_ids"][0]
+    api.post(
+        f"/ideas/{ai_idea_id}/human-decisions",
+        {"decision": "go", "rationale": "判断"},
+        expect=409,
+    )
+
+    # 人間が adopt した後は記録できる
+    api.post(f"/ideas/{candidate['id']}/adopt", {}, expect=200)
+    decision = api.post(
+        f"/ideas/{candidate['id']}/human-decisions", {"decision": "no_go", "rationale": "判断"}
+    )
+    assert decision["decision"] == "no_go"
+
+
 def test_decision_rejects_unrelated_reviews(api: Api) -> None:
     _, analysis, _ = _market_research(api)
     review = api.post(f"/analyses/{analysis['id']}/human-reviews", {"decision": "approve"})

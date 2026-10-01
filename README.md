@@ -49,7 +49,7 @@ Docker を使わない場合は、PostgreSQL 16 を用意して `DATABASE_URL` �
 4. `POST /api/v1/evidence` で根拠を登録する（`source_type` は `human_input` / `document`）
 5. `POST /api/v1/ideas/{id}/stage-runs`（`{"stage_key": "market_research"}`）で MarketResearcher を実行する
 6. `POST /api/v1/analyses/{id}/human-reviews` で人間がレビューする
-7. `POST /api/v1/ideas/{id}/human-decisions` で人間が最終判断（go / no_go / hold / pivot）を記録する
+7. `POST /api/v1/ideas/{id}/human-decisions` で人間が最終判断（go / no_go / hold / pivot）を記録する（`adopted` の Idea のみ）
 
 > ⚠️ `X-Actor-Id` は認証ではありません。ヘッダの値をそのまま信頼する、第1回専用の簡易方式です。外部に公開する環境では使えません。
 

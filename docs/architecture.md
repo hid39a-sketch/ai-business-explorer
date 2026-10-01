@@ -44,7 +44,7 @@ PostgreSQL 16
 | 操作 | アプリ層 | DB 層 |
 |---|---|---|
 | Human Review | `require_human` | 複合 FK（actor_id, actor_type）+ `CHECK (reviewer_actor_type = 'human')` |
-| Human Decision | `require_human` | 同上 |
+| Human Decision | `require_human` + 対象 Idea が `adopted` であること | 同上 |
 | ステージ実行・再実行・差し戻し | `require_human` | `stage_runs` に同様の複合 FK + CHECK |
 | Idea の採用・却下・更新 | `require_human` | （監査ログに記録） |
 | Evidence の登録・撤回 | `require_human` | `source_type` から `ai_generated` を CHECK で排除 |
@@ -76,6 +76,7 @@ PostgreSQL 16
 | LLM・ツール呼び出しの明細 | Future Extension（第1回は executions に集約） |
 | ステージの進め方 | 1ステージずつ人間が API から実行する。自動連鎖しない |
 | Idea の初期状態 | AI 生成も人間作成も `candidate`。adopt / reject は人間だけ |
+| Human Decision の条件 | 対象 Idea が `adopted` のときだけ記録できる（`candidate` / `rejected` では 409） |
 
 ## Future Extension
 

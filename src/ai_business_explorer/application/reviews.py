@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from ai_business_explorer.application.commands import HumanDecisionCreate, HumanReviewCreate
 from ai_business_explorer.application.common import record_audit, require_human, to_jsonable
-from ai_business_explorer.domain.enums import REVIEW_STATUS_BY_DECISION
-from ai_business_explorer.domain.errors import DomainValidationError
+from ai_business_explorer.domain.enums import REVIEW_STATUS_BY_DECISION, AdoptionStatus
+from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
 from ai_business_explorer.infrastructure.db.models import Actor, HumanDecision, HumanReview
 from ai_business_explorer.infrastructure.db.repositories import (
     AnalysisRepository,
@@ -69,6 +69,11 @@ class DecisionService:
     def create(self, actor: Actor, idea_id: UUID, cmd: HumanDecisionCreate) -> HumanDecision:
         require_human(actor, "make business decisions")
         idea = self.ideas.get_or_raise(idea_id)
+        # 最終判断は、人間が採用（adopt）して調査対象にした Idea に対してのみ記録できる。
+        if idea.adoption_status != AdoptionStatus.ADOPTED.value:
+            raise InvalidStateError(
+                f"idea is '{idea.adoption_status}'; human decisions require an 'adopted' idea"
+            )
         for review_id in cmd.based_on_review_ids:
             review = self.reviews.get_or_raise(review_id)
             related = review.idea_id == idea.id or (

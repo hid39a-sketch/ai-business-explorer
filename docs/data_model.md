@@ -68,6 +68,7 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 
 - **Idea**
   - 採否：`candidate → adopted` / `candidate → rejected`。人間のみが実行でき、一方向の遷移。
+  - 最終判断：`human_decisions` は `adopted` の Idea にだけ記録できる（candidate → adopt → 調査・分析 → Human Review → Human Decision）。
   - 調査：`current_stage_key` は、最新かつ成功した試行のうち最も後ろのステージ。
 - **stage_runs / executions**：`running → succeeded | failed`。
   - 再実行：`rerun_of_id` に現在の最新試行を指定する。
