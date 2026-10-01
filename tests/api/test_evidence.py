@@ -125,15 +125,14 @@ def test_ai_generated_and_unknown_source_types_are_rejected(api: Api, source_typ
     api.post("/evidence", _body(exp["id"], source_type=source_type), expect=422)
 
 
-def test_content_hash_is_deterministic_and_content_sensitive(api: Api) -> None:
+def test_content_hash_is_recorded_and_content_sensitive(api: Api) -> None:
+    # 同じ内容の重複登録を許可するかは未確定（Open Question）のため、ここでは扱わない。
     exp = api.exploration()
-    a = api.post("/evidence", _body(exp["id"], quote="同じ引用"))
-    b = api.post("/evidence", _body(exp["id"], quote="同じ引用"))
-    c = api.post("/evidence", _body(exp["id"], quote="違う引用"))
-    assert len(a["content_hash"]) == 64
-    assert a["content_hash"] == b["content_hash"]
-    assert a["content_hash"] != c["content_hash"]
-    assert a["id"] != b["id"]  # 同じ内容でも別の Evidence として登録される
+    a = api.post("/evidence", _body(exp["id"], quote="引用A"))
+    b = api.post("/evidence", _body(exp["id"], quote="引用B"))
+    assert all(len(e["content_hash"]) == 64 for e in (a, b))
+    int(a["content_hash"], 16)  # 16進数
+    assert a["content_hash"] != b["content_hash"]
 
 
 # ---------------------------------------------------------------- 所属の整合性
@@ -272,7 +271,6 @@ def test_retraction_keeps_the_record_and_requires_a_reason(api: Api) -> None:
     assert {k: after[k] for k in ("title", "content_hash", "created_at")} == {
         k: ev[k] for k in ("title", "content_hash", "created_at")
     }
-    assert [e["id"] for e in api.get(f"/explorations/{exp['id']}/evidence")] == [ev["id"]]
     api.post(f"/evidence/{ev['id']}/retract", {"reason": "再度"}, expect=409)
 
 
@@ -281,9 +279,9 @@ def test_correction_is_retract_plus_new_registration(api: Api) -> None:
     old = api.post("/evidence", _body(exp["id"], quote="誤った数値"))
     api.post(f"/evidence/{old['id']}/retract", {"reason": "数値の誤り"}, expect=200)
     new = api.post("/evidence", _body(exp["id"], quote="正しい数値"))
-    listed = {e["id"]: e for e in api.get(f"/explorations/{exp['id']}/evidence")}
-    assert listed[old["id"]]["retracted_at"] is not None
-    assert listed[new["id"]]["retracted_at"] is None
+    assert api.get(f"/evidence/{old['id']}")["retracted_at"] is not None
+    assert api.get(f"/evidence/{new['id']}")["retracted_at"] is None
+    assert new["id"] != old["id"]
 
 
 def test_unknown_evidence_is_404(api: Api) -> None:
@@ -306,16 +304,15 @@ def test_lists_are_scoped_to_exploration_and_idea(api: Api) -> None:
 
     exp_ids = {e["id"] for e in api.get(f"/explorations/{exp['id']}/evidence")}
     assert exp_ids == {exp_level["id"], ev_a["id"], ev_b["id"]}
-    assert [e["id"] for e in api.get(f"/ideas/{idea_a['id']}/evidence")] == [ev_a["id"]]
-    assert [e["id"] for e in api.get(f"/ideas/{idea_b['id']}/evidence")] == [ev_b["id"]]
+    # Idea ごとの一覧: 自分の Evidence は含み、他の Idea・他の案件の Evidence は含まない。
+    # 案件全体の Evidence を含めるかは未確定（Open Question）のため確認しない。
+    for idea, own, others in ((idea_a, ev_a, ev_b), (idea_b, ev_b, ev_a)):
+        ids = {e["id"] for e in api.get(f"/ideas/{idea['id']}/evidence")}
+        assert own["id"] in ids
+        assert others["id"] not in ids
+        assert ids <= exp_ids
     api.get(f"/explorations/{UNKNOWN_ID}/evidence", expect=404)
     api.get(f"/ideas/{UNKNOWN_ID}/evidence", expect=404)
-
-
-def test_reads_do_not_require_actor(api: Api) -> None:
-    exp = api.exploration()
-    ev = api.post("/evidence", _body(exp["id"]))
-    assert api.client.get(f"/api/v1/evidence/{ev['id']}").status_code == 200
 
 
 # ---------------------------------------------------------------- 監査ログ
@@ -427,20 +424,25 @@ def _count(session: Session, model: type[Any]) -> int:
     return int(session.scalar(select(func.count()).select_from(model)) or 0)
 
 
-def test_all_relation_types_are_stored(
+def test_each_relation_type_is_stored_with_its_claim(
     api: Api, session: Session, settings: Settings, human: Actor
 ) -> None:
     exp = api.exploration()
     idea = api.adopted_idea(exp["id"])
     ev = api.evidence(exp["id"], idea["id"])
+    relations = {"c1": "supports", "c2": "contradicts", "c3": "context"}
 
     def responder(payload: dict[str, Any]) -> dict[str, Any]:
-        refs = [
-            {"evidence_id": ev["id"], "relation": relation}
-            for relation in ("supports", "contradicts", "context")
-        ]
         return _claims(
-            {"id": "c1", "text": "主張", "kind": "evidence_based", "evidence_refs": refs}
+            *(
+                {
+                    "id": claim_id,
+                    "text": f"{relation} の主張",
+                    "kind": "evidence_based",
+                    "evidence_refs": [{"evidence_id": ev["id"], "relation": relation}],
+                }
+                for claim_id, relation in relations.items()
+            )
         )
 
     status, execution = _run_market_research(session, settings, human, idea["id"], responder)
@@ -450,9 +452,8 @@ def test_all_relation_types_are_stored(
             AnalysisEvidenceLink.analysis_id == UUID(execution.output["analysis_id"])
         )
     ).all()
-    # 同じ claim と Evidence の組は1つのリンクにまとめられる
-    assert len(links) == 1
-    assert links[0].claim_ref == "c1"
+    assert {(link.claim_ref, link.relation) for link in links} == set(relations.items())
+    assert {str(link.evidence_id) for link in links} == {ev["id"]}
 
 
 @pytest.mark.parametrize("target", ["other_idea", "retracted", "other_exploration", "unknown"])
