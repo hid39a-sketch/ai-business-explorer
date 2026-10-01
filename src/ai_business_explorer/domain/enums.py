@@ -1,5 +1,6 @@
 """ドメインで使う列挙値。DB には文字列として保存し、CHECK 制約で値を制限する。"""
 
+from collections.abc import Iterable
 from enum import StrEnum
 
 
@@ -33,6 +34,43 @@ _ROLE_RANK: dict[OrganizationRole, int] = {
     OrganizationRole.REVIEWER: 2,
     OrganizationRole.ADMIN: 3,
 }
+
+
+class DataClassification(StrEnum):
+    """データ分類（第2回仕様 11章）。public < internal < confidential < restricted。
+
+    探索案件と Evidence に付け、既定は internal。Idea は探索案件の分類に従う。
+    分析の分類は入力の最も高い分類で、人間も直接は変更できない。
+    """
+
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
+    RESTRICTED = "restricted"
+
+    @property
+    def rank(self) -> int:
+        return _CLASSIFICATION_RANK[self]
+
+    def exceeds(self, limit: "DataClassification") -> bool:
+        return self.rank > limit.rank
+
+
+_CLASSIFICATION_RANK: dict[DataClassification, int] = {
+    DataClassification.PUBLIC: 0,
+    DataClassification.INTERNAL: 1,
+    DataClassification.CONFIDENTIAL: 2,
+    DataClassification.RESTRICTED: 3,
+}
+
+
+def highest_classification(values: Iterable[str | DataClassification]) -> DataClassification:
+    """最も高い分類。入力がなければ public（何も送らない）。"""
+    return max(
+        (DataClassification(v) for v in values),
+        key=lambda c: c.rank,
+        default=DataClassification.PUBLIC,
+    )
 
 
 class StageAssignmentRole(StrEnum):

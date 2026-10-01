@@ -75,6 +75,7 @@ def _analysis(session: Session, human: Actor, exploration: Exploration) -> Analy
         version_no=1,
         summary="s",
         body={"claims": [], "data": {}},
+        classification="internal",
     )
     session.add(analysis)
     session.commit()

@@ -41,6 +41,7 @@ from ai_business_explorer.domain.enums import (
     AdoptionStatus,
     AIEmployeeStatus,
     ClaimKind,
+    DataClassification,
     ErrorType,
     EvidenceRelation,
     EvidenceSourceType,
@@ -196,6 +197,7 @@ class Exploration(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, 
     __table_args__ = (
         Index("ix_explorations_list", "organization_id", "created_at", "id"),
         CheckConstraint(f"status IN ({sql_in(ExplorationStatus)})", name="status"),
+        CheckConstraint(f"classification IN ({sql_in(DataClassification)})", name="classification"),
         UniqueConstraint("id", "organization_id", name="uq_explorations_id_organization_id"),
     )
 
@@ -203,6 +205,10 @@ class Exploration(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, 
     theme: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default=ExplorationStatus.ACTIVE.value)
+    # データ分類（第2回仕様 11章）。Idea はこの分類に従う
+    classification: Mapped[str] = mapped_column(
+        String(16), default=DataClassification.INTERNAL.value
+    )
     created_by_actor_id: Mapped[UUID] = mapped_column(ForeignKey("actors.id"))
 
 
@@ -445,6 +451,7 @@ class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
         ),
         CheckConstraint(f"review_status IN ({sql_in(ReviewStatus)})", name="review_status"),
         CheckConstraint("version_no >= 1", name="version_positive"),
+        CheckConstraint(f"classification IN ({sql_in(DataClassification)})", name="classification"),
     )
 
     exploration_id: Mapped[UUID] = mapped_column(ForeignKey("explorations.id"), index=True)
@@ -461,6 +468,8 @@ class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
     review_status: Mapped[str] = mapped_column(
         String(32), default=ReviewStatus.PENDING_REVIEW.value
     )
+    # 入力（探索案件・Evidence・前段の分析）の最も高い分類。算出値で、人間も変更できない（E-04）
+    classification: Mapped[str] = mapped_column(String(16))
 
 
 class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
@@ -511,6 +520,7 @@ class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
         CheckConstraint(
             "(retracted_at IS NULL) = (retraction_reason IS NULL)", name="retraction_reason"
         ),
+        CheckConstraint(f"classification IN ({sql_in(DataClassification)})", name="classification"),
     )
 
     exploration_id: Mapped[UUID] = mapped_column(ForeignKey("explorations.id"), index=True)
@@ -536,6 +546,10 @@ class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
     purge_reason: Mapped[str | None] = mapped_column(Text)
     purged_by_actor_id: Mapped[UUID | None] = mapped_column()
     purged_by_actor_type: Mapped[str | None] = mapped_column(String(16))
+    # データ分類（第2回仕様 11章）
+    classification: Mapped[str] = mapped_column(
+        String(16), default=DataClassification.INTERNAL.value
+    )
 
 
 class AnalysisEvidenceLink(Base):

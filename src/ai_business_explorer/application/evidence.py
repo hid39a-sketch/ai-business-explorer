@@ -95,6 +95,7 @@ class EvidenceService:
             after={
                 "title": evidence.title,
                 "source_type": evidence.source_type,
+                "classification": evidence.classification,
                 "duplicate_of": [d.id for d in duplicates],
             },
         )

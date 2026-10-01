@@ -10,10 +10,12 @@ from ai_business_explorer.application.common import (
     snapshot,
 )
 from ai_business_explorer.application.pagination import Page, PageRequest, paginate
+from ai_business_explorer.domain.enums import DataClassification, OrganizationRole
+from ai_business_explorer.domain.errors import PermissionDeniedError
 from ai_business_explorer.infrastructure.db.models import Actor, Exploration
 from ai_business_explorer.infrastructure.db.repositories import ExplorationRepository
 
-AUDIT_FIELDS = ["title", "theme", "description", "status"]
+AUDIT_FIELDS = ["title", "theme", "description", "status", "classification"]
 
 
 class ExplorationService:
@@ -54,12 +56,25 @@ class ExplorationService:
             page=page,
         )
 
-    def update(self, actor: Actor, exploration_id: UUID, cmd: ExplorationUpdate) -> Exploration:
+    def update(
+        self,
+        actor: Actor,
+        role: OrganizationRole,
+        exploration_id: UUID,
+        cmd: ExplorationUpdate,
+    ) -> Exploration:
         require_human(actor, "update explorations")
         exploration = self.explorations.get_or_raise(exploration_id)
         changes = cmd.model_dump(exclude_unset=True)
         if not changes:
             return exploration
+        new = changes.get("classification")
+        # 分類を下げると、より多くの LLM に送れるようになるので admin のみ（第2回仕様 11章）
+        lowering = new is not None and DataClassification(new).rank < (
+            DataClassification(exploration.classification).rank
+        )
+        if lowering and not role.includes(OrganizationRole.ADMIN):
+            raise PermissionDeniedError("only admin can lower the data classification")
         before = snapshot(exploration, AUDIT_FIELDS)
         for field, value in changes.items():
             setattr(exploration, field, value)
