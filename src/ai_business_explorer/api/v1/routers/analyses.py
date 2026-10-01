@@ -6,10 +6,11 @@ from ai_business_explorer.api.v1.deps import ReviewerDep, SessionDep
 from ai_business_explorer.api.v1.schemas import (
     AnalysisDetailOut,
     AnalysisOut,
+    ClaimOut,
     EvidenceLinkOut,
     HumanReviewOut,
 )
-from ai_business_explorer.application.analyses import AnalysisService
+from ai_business_explorer.application.analyses import AnalysisService, ClaimDetail
 from ai_business_explorer.application.commands import HumanReviewCreate
 from ai_business_explorer.application.reviews import ReviewService
 
@@ -19,10 +20,35 @@ router = APIRouter(prefix="/analyses", tags=["analyses"])
 @router.get("/{analysis_id}", response_model=AnalysisDetailOut)
 def get_analysis(analysis_id: UUID, session: SessionDep) -> object:
     detail = AnalysisService(session).get(analysis_id)
+    claims = [_claim_out(c) for c in detail.claims]
     return AnalysisDetailOut(
         **AnalysisOut.model_validate(detail.analysis).model_dump(),
-        evidence_links=[EvidenceLinkOut.model_validate(link) for link in detail.evidence_links],
+        claims=claims,
+        evidence_links=[link for c in claims for link in c.evidence_links],
         human_reviews=[HumanReviewOut.model_validate(r) for r in detail.reviews],
+    )
+
+
+def _claim_out(detail: ClaimDetail) -> ClaimOut:
+    claim = detail.claim
+    return ClaimOut(
+        id=claim.id,
+        claim_key=claim.claim_key,
+        ordinal=claim.ordinal,
+        kind=claim.kind,
+        text=claim.text,
+        evidence_links=[
+            EvidenceLinkOut(
+                claim_id=claim.id,
+                claim_ref=claim.claim_key,
+                evidence_id=link.evidence_id,
+                relation=link.relation,
+            )
+            for link in detail.evidence_links
+        ],
+        latest_review=(
+            HumanReviewOut.model_validate(detail.latest_review) if detail.latest_review else None
+        ),
     )
 
 
@@ -30,7 +56,7 @@ def get_analysis(analysis_id: UUID, session: SessionDep) -> object:
     "/{analysis_id}/human-reviews",
     response_model=HumanReviewOut,
     status_code=status.HTTP_201_CREATED,
-    summary="AI Analysis をレビューする（reviewer 以上の人間のみ）",
+    summary="AI Analysis または主張（claim_id）をレビューする（reviewer 以上の人間のみ）",
 )
 def create_human_review(
     analysis_id: UUID, body: HumanReviewCreate, actor: ReviewerDep, session: SessionDep

@@ -7,16 +7,12 @@
 - downgrade で 0001 に戻せる。
 """
 
-import os
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, create_engine, make_url, text
-
-from tests.conftest import ROOT, TEST_DATABASE_URL
+from sqlalchemy import Connection, Engine, text
 
 DEFAULT_ORG = "00000000-0000-7000-8000-000000000100"
 HUMAN = "00000000-0000-7000-8000-000000000001"
@@ -100,35 +96,6 @@ INSERT INTO human_decisions (id, idea_id, decided_by_actor_id, decided_by_actor_
 INSERT INTO audit_events (id, entity_type, entity_id, action, actor_id)
   VALUES (gen_random_uuid(), 'exploration', '{EXPLORATION}', 'created', '{HUMAN}');
 """  # noqa: S608
-
-
-@pytest.fixture(scope="module")
-def migration_url() -> Iterator[str]:
-    """このテスト専用のデータベース（他のテストのスキーマに触れない）。"""
-    base = make_url(TEST_DATABASE_URL)
-    name = f"{base.database}_migration"
-    admin = create_engine(base.set(database="postgres"), isolation_level="AUTOCOMMIT")
-    with admin.connect() as conn:
-        conn.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
-        conn.execute(text(f'CREATE DATABASE "{name}"'))
-    yield base.set(database=name).render_as_string(hide_password=False)
-    with admin.connect() as conn:
-        conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-    admin.dispose()
-
-
-@pytest.fixture(scope="module")
-def engine(migration_url: str) -> Iterator[Engine]:
-    engine = create_engine(migration_url)
-    yield engine
-    engine.dispose()
-
-
-@pytest.fixture(scope="module")
-def alembic_cfg(migration_url: str) -> Config:
-    cfg = Config(os.path.join(ROOT, "alembic.ini"))
-    cfg.set_main_option("sqlalchemy.url", migration_url)
-    return cfg
 
 
 def _counts(conn: Connection) -> dict[str, Any]:

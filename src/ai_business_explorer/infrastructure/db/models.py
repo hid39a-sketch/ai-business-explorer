@@ -10,6 +10,10 @@
 - analyses        : AI の分析。必ず executions に紐づく。本体（body）は不変。
 - human_reviews   : 人間のみ（複合 FK + CHECK actor_type = 'human'）。追記のみ。
 - human_decisions : 人間のみ（同上）。追記のみ。
+
+主張と根拠（第2回 D-15）:
+- claims / claim_evidence_links が正本。analyses.body.claims は生成時点のAI出力スナップショット。
+- analysis_evidence_links（第1回）は移行後に凍結。DB トリガーで書き込みを拒否し、アプリも書かない。
 """
 
 from datetime import datetime
@@ -26,6 +30,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -35,6 +40,7 @@ from ai_business_explorer.domain.enums import (
     ActorType,
     AdoptionStatus,
     AIEmployeeStatus,
+    ClaimKind,
     ErrorType,
     EvidenceRelation,
     EvidenceSourceType,
@@ -397,6 +403,7 @@ class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
 
     __tablename__ = "evidence"
     __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_evidence_id_organization_id"),
         ForeignKeyConstraint(
             ["exploration_id", "organization_id"],
             ["explorations.id", "explorations.organization_id"],
@@ -426,6 +433,13 @@ class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Bas
 
 
 class AnalysisEvidenceLink(Base):
+    """第1回の根拠リンク。移行後は凍結（読み取り専用の履歴）。
+
+    新しい処理は claim_evidence_links を使う。
+
+    INSERT / UPDATE / DELETE / TRUNCATE は DB トリガーで拒否される（migration 0003）。
+    """
+
     __tablename__ = "analysis_evidence_links"
     __table_args__ = (
         CheckConstraint(f"relation IN ({sql_in(EvidenceRelation)})", name="relation"),
@@ -439,6 +453,59 @@ class AnalysisEvidenceLink(Base):
     relation: Mapped[str] = mapped_column(String(16))
 
 
+class Claim(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
+    """AI Analysis の主張（正本）。不変。claim_key は AI が付けたID（例：c1）。"""
+
+    __tablename__ = "claims"
+    __table_args__ = (
+        CheckConstraint(f"kind IN ({sql_in(ClaimKind)})", name="kind"),
+        CheckConstraint("ordinal >= 0", name="ordinal_non_negative"),
+        UniqueConstraint("analysis_id", "claim_key", name="uq_claims_analysis_id_claim_key"),
+        UniqueConstraint("id", "organization_id", name="uq_claims_id_organization_id"),
+        # human_reviews.claim_id の複合 FK の参照先（主張が対象の分析に属することを保証する）
+        UniqueConstraint("id", "analysis_id", name="uq_claims_id_analysis_id"),
+        ForeignKeyConstraint(
+            ["analysis_id", "organization_id"],
+            ["analyses.id", "analyses.organization_id"],
+            name="fk_claims_analysis_org",
+        ),
+    )
+
+    analysis_id: Mapped[UUID] = mapped_column(ForeignKey("analyses.id"), index=True)
+    claim_key: Mapped[str] = mapped_column(String(64))
+    ordinal: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(32))
+    text: Mapped[str] = mapped_column(Text)
+
+
+class ClaimEvidenceLink(OrganizationScopedMixin, Base):
+    """主張と Evidence の関係（正本）。主キーは（主張・Evidence・relation）。不変。"""
+
+    __tablename__ = "claim_evidence_links"
+    __table_args__ = (
+        CheckConstraint(f"relation IN ({sql_in(EvidenceRelation)})", name="relation"),
+        ForeignKeyConstraint(
+            ["claim_id", "organization_id"],
+            ["claims.id", "claims.organization_id"],
+            name="fk_claim_evidence_links_claim_org",
+        ),
+        ForeignKeyConstraint(
+            ["evidence_id", "organization_id"],
+            ["evidence.id", "evidence.organization_id"],
+            name="fk_claim_evidence_links_evidence_org",
+        ),
+    )
+
+    claim_id: Mapped[UUID] = mapped_column(ForeignKey("claims.id"), primary_key=True)
+    evidence_id: Mapped[UUID] = mapped_column(
+        ForeignKey("evidence.id"), primary_key=True, index=True
+    )
+    relation: Mapped[str] = mapped_column(String(16), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class HumanReview(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
     """人間によるレビュー。人間以外の actor では DB レベルで挿入できない。追記のみ。"""
 
@@ -448,6 +515,11 @@ class HumanReview(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, 
             ["analysis_id", "organization_id"],
             ["analyses.id", "analyses.organization_id"],
             name="fk_human_reviews_analysis_org",
+        ),
+        ForeignKeyConstraint(
+            ["claim_id", "analysis_id"],
+            ["claims.id", "claims.analysis_id"],
+            name="fk_human_reviews_claim_analysis",
         ),
         CheckConstraint(f"decision IN ({sql_in(ReviewDecision)})", name="decision"),
         CheckConstraint(f"reviewer_actor_type = '{HUMAN}'", name="reviewer_is_human"),
@@ -459,6 +531,8 @@ class HumanReview(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, 
     )
 
     analysis_id: Mapped[UUID] = mapped_column(ForeignKey("analyses.id"), index=True)
+    # 主張単位のレビュー（任意）。分析全体の review_status は変えない（B-15）。
+    claim_id: Mapped[UUID | None] = mapped_column(index=True)
     exploration_id: Mapped[UUID] = mapped_column(ForeignKey("explorations.id"))
     idea_id: Mapped[UUID | None] = mapped_column(ForeignKey("ideas.id"), index=True)
     reviewer_actor_id: Mapped[UUID] = mapped_column()

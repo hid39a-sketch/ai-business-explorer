@@ -168,6 +168,9 @@ class SendBackCommand(_Command):
 
 
 class HumanReviewCreate(_Command):
+    """claim_id を指定すると主張単位のレビューになる（分析全体の review_status は変えない）。"""
+
+    claim_id: UUID | None = None
     decision: ReviewDecision
     comment: str | None = LongText
     corrections: dict[str, Any] | None = None

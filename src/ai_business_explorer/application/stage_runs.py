@@ -26,6 +26,9 @@ from ai_business_explorer.agents.base import (
     ExplorationView,
     IdeaView,
 )
+from ai_business_explorer.agents.base import (
+    Claim as AgentClaim,
+)
 from ai_business_explorer.agents.registry import AgentRegistry
 from ai_business_explorer.application.commands import (
     ExplorationStageRunCommand,
@@ -64,7 +67,8 @@ from ai_business_explorer.infrastructure.db.models import (
     Actor,
     AIEmployee,
     Analysis,
-    AnalysisEvidenceLink,
+    Claim,
+    ClaimEvidenceLink,
     Evidence,
     Execution,
     Exploration,
@@ -73,8 +77,9 @@ from ai_business_explorer.infrastructure.db.models import (
 )
 from ai_business_explorer.infrastructure.db.repositories import (
     AIEmployeeRepository,
-    AnalysisEvidenceLinkRepository,
     AnalysisRepository,
+    ClaimEvidenceLinkRepository,
+    ClaimRepository,
     EvidenceRepository,
     ExecutionRepository,
     ExplorationRepository,
@@ -140,7 +145,8 @@ class StageRunService:
         self.executions = ExecutionRepository(session)
         self.analyses = AnalysisRepository(session)
         self.evidence = EvidenceRepository(session)
-        self.links = AnalysisEvidenceLinkRepository(session)
+        self.claims = ClaimRepository(session)
+        self.links = ClaimEvidenceLinkRepository(session)
 
     # ------------------------------------------------------------------ 公開操作（人間のみ）
 
@@ -493,6 +499,8 @@ class StageRunService:
         if len(claim_ids) != len(set(claim_ids)):
             raise AgentOutputError("claim ids must be unique")
         for claim in draft.claims:
+            # 実装が検証を経ずに出力を組み立てた場合に備え、relation の規則（C-09）を再検証する。
+            AgentClaim.model_validate(claim.model_dump())
             for ref in claim.evidence_refs:
                 if ref.evidence_id not in evidence_ids:
                     raise AgentOutputError(
@@ -528,17 +536,26 @@ class StageRunService:
                 review_status=ReviewStatus.PENDING_REVIEW.value,
             )
         )
-        seen: set[tuple[UUID, str]] = set()
-        for claim in draft.claims:
-            for ref in claim.evidence_refs:
-                if (ref.evidence_id, claim.id) in seen:
-                    continue
-                seen.add((ref.evidence_id, claim.id))
+        # 主張と根拠は claims / claim_evidence_links が正本。
+        # body.claims は生成時点のスナップショットとして別に残す。
+        # 重複や矛盾する relation は出力の検証（C-09）で拒否済みなので、ここでは捨てない。
+        for ordinal, draft_claim in enumerate(draft.claims):
+            claim = self.claims.add(
+                Claim(
+                    organization_id=analysis.organization_id,
+                    analysis_id=analysis.id,
+                    claim_key=draft_claim.id,
+                    ordinal=ordinal,
+                    kind=draft_claim.kind.value,
+                    text=draft_claim.text,
+                )
+            )
+            for ref in draft_claim.evidence_refs:
                 self.links.add(
-                    AnalysisEvidenceLink(
-                        analysis_id=analysis.id,
+                    ClaimEvidenceLink(
+                        organization_id=analysis.organization_id,
+                        claim_id=claim.id,
                         evidence_id=ref.evidence_id,
-                        claim_ref=claim.id,
                         relation=ref.relation.value,
                     )
                 )

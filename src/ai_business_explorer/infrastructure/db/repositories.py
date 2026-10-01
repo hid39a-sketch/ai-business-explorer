@@ -19,8 +19,9 @@ from ai_business_explorer.infrastructure.db.models import (
     Actor,
     AIEmployee,
     Analysis,
-    AnalysisEvidenceLink,
     AuditEvent,
+    Claim,
+    ClaimEvidenceLink,
     Evidence,
     Execution,
     Exploration,
@@ -201,15 +202,29 @@ class EvidenceRepository(Repository[Evidence]):
     model = Evidence
 
 
-class AnalysisEvidenceLinkRepository:
+class ClaimRepository(Repository[Claim]):
+    model = Claim
+
+    def for_analysis(self, analysis_id: UUID) -> Sequence[Claim]:
+        return self.list_where(Claim.analysis_id == analysis_id, order_by=Claim.ordinal)
+
+
+class ClaimEvidenceLinkRepository:
+    """主張と Evidence の関係（正本）。
+
+    第1回の analysis_evidence_links は凍結済みで、書き込まない。
+    """
+
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def add(self, link: AnalysisEvidenceLink) -> None:
+    def add(self, link: ClaimEvidenceLink) -> None:
         self.session.add(link)
 
-    def for_analysis(self, analysis_id: UUID) -> Sequence[AnalysisEvidenceLink]:
-        stmt = select(AnalysisEvidenceLink).where(AnalysisEvidenceLink.analysis_id == analysis_id)
+    def for_claims(self, claim_ids: Sequence[UUID]) -> Sequence[ClaimEvidenceLink]:
+        if not claim_ids:
+            return []
+        stmt = select(ClaimEvidenceLink).where(ClaimEvidenceLink.claim_id.in_(claim_ids))
         return self.session.scalars(stmt).all()
 
 

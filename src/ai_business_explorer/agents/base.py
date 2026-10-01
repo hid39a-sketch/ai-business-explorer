@@ -67,9 +67,28 @@ class Claim(BaseModel):
     evidence_refs: list[EvidenceRef] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _evidence_based_requires_refs(self) -> "Claim":
-        if self.kind is ClaimKind.EVIDENCE_BASED and not self.evidence_refs:
-            raise ValueError(f"claim '{self.id}' is evidence_based but has no evidence_refs")
+    def _check_evidence_relations(self) -> "Claim":
+        """主張と Evidence の関係の検証（第2回仕様 C-09）。違反した出力は何も保存しない。
+
+        - 同じ Evidence に同じ relation を重複して付けない。
+        - 同じ Evidence に supports と contradicts を同時に付けない。
+        - evidence_based の主張は supports か contradicts を最低1つ持つ（context だけでは不可）。
+        """
+        pairs = [(ref.evidence_id, ref.relation) for ref in self.evidence_refs]
+        if len(pairs) != len(set(pairs)):
+            raise ValueError(f"claim '{self.id}' has duplicate evidence relations")
+        relations_by_evidence: dict[UUID, set[EvidenceRelation]] = {}
+        for evidence_id, relation in pairs:
+            relations_by_evidence.setdefault(evidence_id, set()).add(relation)
+        both = {EvidenceRelation.SUPPORTS, EvidenceRelation.CONTRADICTS}
+        if any(both <= relations for relations in relations_by_evidence.values()):
+            raise ValueError(f"claim '{self.id}' both supports and contradicts the same evidence")
+        if self.kind is ClaimKind.EVIDENCE_BASED and not any(
+            relation in both for _, relation in pairs
+        ):
+            raise ValueError(
+                f"claim '{self.id}' is evidence_based but has no supports/contradicts evidence"
+            )
         return self
 
 
