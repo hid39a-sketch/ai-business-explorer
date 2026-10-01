@@ -17,6 +17,7 @@
 """
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -27,6 +28,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -40,6 +42,8 @@ from ai_business_explorer.domain.enums import (
     ActorType,
     AdoptionStatus,
     AIEmployeeStatus,
+    BudgetMode,
+    CallStatus,
     ClaimKind,
     DataClassification,
     ErrorType,
@@ -49,6 +53,8 @@ from ai_business_explorer.domain.enums import (
     HumanDecisionValue,
     OrganizationRole,
     OriginType,
+    PayloadMode,
+    PricingKind,
     ReviewDecision,
     ReviewStatus,
     RunStatus,
@@ -376,6 +382,9 @@ class Execution(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Ba
         UniqueConstraint("stage_run_id", "ai_employee_id", name="uq_executions_stage_run_employee"),
         # analyses の AI社員と実行の AI社員の一致を複合 FK で保証するための一意制約
         UniqueConstraint("id", "ai_employee_id", name="uq_executions_id_ai_employee_id"),
+        UniqueConstraint("id", "organization_id", name="uq_executions_id_organization_id"),
+        CheckConstraint("cost_amount >= 0", name="cost_non_negative"),
+        CheckConstraint("cost_limit IS NULL OR cost_limit >= 0", name="cost_limit_non_negative"),
     )
 
     stage_run_id: Mapped[UUID] = mapped_column(ForeignKey("stage_runs.id"), index=True)
@@ -404,6 +413,11 @@ class Execution(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Ba
     # 実際に実行を始めた日時（queued の間は空）
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 費用の合計（LLM・Tool の呼び出しごとに加算。取り消し・失敗でも残る。第2回仕様 10章・E-07）
+    cost_amount: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal(0))
+    cost_currency: Mapped[str] = mapped_column(String(3))
+    # 受け付けた時点の1実行あたりの費用上限（予算の確保にも使う）。第2回以前の実行は NULL
+    cost_limit: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
 
 
 class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
@@ -704,3 +718,171 @@ class AuditEvent(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, B
     execution_id: Mapped[UUID | None] = mapped_column(ForeignKey("executions.id"))
     before: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     after: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+# ------------------------------------------------------------ 費用とログ（第2回 10・12章）
+
+_CURRENCY = "~ '^[A-Z]{3}$'"
+
+
+class Pricing(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """単価表。LLM（プロバイダー × モデル）と Tool（名前）の単価と、適用開始日時。
+
+    プロバイダーの価格表なので組織をまたいで共通。単価の変更は新しい行で行い、履歴を残す。
+    """
+
+    __tablename__ = "pricing"
+    __table_args__ = (
+        UniqueConstraint(
+            "kind", "provider", "model", "effective_from", name="uq_pricing_kind_provider_model"
+        ),
+        CheckConstraint(f"kind IN ({sql_in(PricingKind)})", name="kind"),
+        CheckConstraint(f"currency {_CURRENCY}", name="currency"),
+        CheckConstraint(
+            "input_per_million_tokens >= 0 AND output_per_million_tokens >= 0 AND per_call >= 0",
+            name="non_negative",
+        ),
+    )
+
+    kind: Mapped[str] = mapped_column(String(16))
+    # LLM はプロバイダー名、Tool は Tool の名前
+    provider: Mapped[str] = mapped_column(String(64))
+    # LLM のモデル。Tool は空文字
+    model: Mapped[str] = mapped_column(String(128), default="")
+    input_per_million_tokens: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal(0))
+    output_per_million_tokens: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal(0))
+    per_call: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal(0))
+    currency: Mapped[str] = mapped_column(String(3))
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Budget(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base):
+    """月単位の予算。exploration_id が NULL なら組織全体、指定があればその探索案件。"""
+
+    __tablename__ = "budgets"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["exploration_id", "organization_id"],
+            ["explorations.id", "explorations.organization_id"],
+            name="fk_budgets_exploration_org",
+        ),
+        Index(
+            "uq_budgets_organization",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("exploration_id IS NULL"),
+        ),
+        Index(
+            "uq_budgets_exploration",
+            "exploration_id",
+            unique=True,
+            postgresql_where=text("exploration_id IS NOT NULL"),
+        ),
+        CheckConstraint(f"mode IN ({sql_in(BudgetMode)})", name="mode"),
+        CheckConstraint(f"currency {_CURRENCY}", name="currency"),
+        CheckConstraint("monthly_limit >= 0", name="limit_non_negative"),
+    )
+
+    exploration_id: Mapped[UUID | None] = mapped_column()
+    monthly_limit: Mapped[Decimal] = mapped_column(Numeric(18, 8))
+    currency: Mapped[str] = mapped_column(String(3))
+    mode: Mapped[str] = mapped_column(String(16), default=BudgetMode.HARD.value)
+
+
+class LLMCall(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
+    """LLM 呼び出しのメタデータ（永続）。本文は llm_call_payloads に分ける。秘密情報は持たない。"""
+
+    __tablename__ = "llm_calls"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["execution_id", "organization_id"],
+            ["executions.id", "executions.organization_id"],
+            name="fk_llm_calls_execution_org",
+        ),
+        UniqueConstraint("id", "organization_id", name="uq_llm_calls_id_organization_id"),
+        Index("ix_llm_calls_list", "organization_id", "created_at", "id"),
+        CheckConstraint(f"status IN ({sql_in(CallStatus)})", name="status"),
+        CheckConstraint(
+            f"error_type IS NULL OR error_type IN ({sql_in(ErrorType)})", name="error_type"
+        ),
+        CheckConstraint(f"payload_mode IN ({sql_in(PayloadMode)})", name="payload_mode"),
+        CheckConstraint(f"classification IN ({sql_in(DataClassification)})", name="classification"),
+        CheckConstraint(f"currency {_CURRENCY}", name="currency"),
+        CheckConstraint(
+            "input_tokens >= 0 AND output_tokens >= 0 AND cost_amount >= 0", name="non_negative"
+        ),
+    )
+
+    execution_id: Mapped[UUID] = mapped_column(index=True)
+    provider: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(128))
+    prompt_key: Mapped[str] = mapped_column(String(64))
+    prompt_version: Mapped[str] = mapped_column(String(16))
+    prompt_hash: Mapped[str | None] = mapped_column(String(64))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_amount: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal(0))
+    currency: Mapped[str] = mapped_column(String(3))
+    pricing_id: Mapped[UUID | None] = mapped_column(ForeignKey("pricing.id"))
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16))
+    error_type: Mapped[str | None] = mapped_column(String(32))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    provider_request_id: Mapped[str | None] = mapped_column(String(256))
+    # 送ったデータの最も高い分類と、本文の保存方式（confidential 以上は保存しない。R-16）
+    classification: Mapped[str] = mapped_column(String(16))
+    payload_mode: Mapped[str] = mapped_column(String(16))
+    # 本文を保存期間の満了などで消した日時
+    payload_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class LLMCallPayload(OrganizationScopedMixin, CreatedAtMixin, Base):
+    """LLM 呼び出しの本文（送ったメッセージと応答）。閲覧は admin のみ。保存期間で消す。"""
+
+    __tablename__ = "llm_call_payloads"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["llm_call_id", "organization_id"],
+            ["llm_calls.id", "llm_calls.organization_id"],
+            name="fk_llm_call_payloads_call_org",
+        ),
+    )
+
+    llm_call_id: Mapped[UUID] = mapped_column(primary_key=True)
+    request: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    response: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class ToolCall(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
+    """Tool 呼び出しのメタデータ（永続）。"""
+
+    __tablename__ = "tool_calls"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["execution_id", "organization_id"],
+            ["executions.id", "executions.organization_id"],
+            name="fk_tool_calls_execution_org",
+        ),
+        Index("ix_tool_calls_list", "organization_id", "created_at", "id"),
+        CheckConstraint(f"status IN ({sql_in(CallStatus)})", name="status"),
+        CheckConstraint(
+            f"error_type IS NULL OR error_type IN ({sql_in(ErrorType)})", name="error_type"
+        ),
+        CheckConstraint(f"currency {_CURRENCY}", name="currency"),
+        CheckConstraint("cost_amount >= 0", name="non_negative"),
+    )
+
+    execution_id: Mapped[UUID] = mapped_column(index=True)
+    tool_name: Mapped[str] = mapped_column(String(64))
+    tool_version: Mapped[str] = mapped_column(String(32))
+    side_effect: Mapped[str] = mapped_column(String(32))
+    input: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # 取得した URL の一覧（Web 取得 Tool。第2回 PR-8 以降）
+    urls: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    cost_amount: Mapped[Decimal] = mapped_column(Numeric(18, 8), default=Decimal(0))
+    currency: Mapped[str] = mapped_column(String(3))
+    pricing_id: Mapped[UUID | None] = mapped_column(ForeignKey("pricing.id"))
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16))
+    error_type: Mapped[str | None] = mapped_column(String(32))
+    error_message: Mapped[str | None] = mapped_column(Text)

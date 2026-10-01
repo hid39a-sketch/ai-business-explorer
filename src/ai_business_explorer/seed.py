@@ -1,13 +1,16 @@
 """初期データ投入（冪等）。
 
 既定組織、人間 actor 1人（admin）、system actor 1人（ロールなし）、
-Fake AI社員2体（それぞれのステージの primary）。
+Fake AI社員2体（それぞれのステージの primary）、Fake LLM の単価（0 USD）。
 
 実行: uv run python -m ai_business_explorer.seed
 """
 
+from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ai_business_explorer.agents.registry import AgentRegistry, build_default_registry
@@ -16,6 +19,7 @@ from ai_business_explorer.domain.enums import (
     ActorType,
     AIEmployeeStatus,
     OrganizationRole,
+    PricingKind,
     StageAssignmentRole,
 )
 from ai_business_explorer.domain.stages import IDEA_GENERATION
@@ -24,6 +28,7 @@ from ai_business_explorer.infrastructure.db.models import (
     AIEmployee,
     Organization,
     OrganizationMembership,
+    Pricing,
     StageAssignment,
 )
 from ai_business_explorer.infrastructure.db.repositories import (
@@ -40,6 +45,9 @@ DEFAULT_ORGANIZATION_ID = UUID("00000000-0000-7000-8000-000000000100")
 DEFAULT_ORGANIZATION_NAME = "Default Organization"
 DEFAULT_HUMAN_ACTOR_ID = UUID("00000000-0000-7000-8000-000000000001")
 SYSTEM_ACTOR_ID = UUID("00000000-0000-7000-8000-000000000002")
+
+# Fake LLM は費用が発生しない。単価の行があることで、予算の確認と費用の記録が同じ経路を通る
+FAKE_PRICING_EFFECTIVE_FROM = datetime(2026, 1, 1, tzinfo=UTC)
 
 SEED_EMPLOYEES = [
     {
@@ -110,7 +118,31 @@ def seed(session: Session) -> None:
                     role=StageAssignmentRole.PRIMARY.value,
                 )
             )
+    _seed_pricing(session)
     session.commit()
+
+
+def _seed_pricing(session: Session) -> None:
+    exists = session.scalars(
+        select(Pricing).where(
+            Pricing.kind == PricingKind.LLM.value,
+            Pricing.provider == FAKE_PROVIDER,
+            Pricing.model == FAKE_MODEL,
+        )
+    ).first()
+    if exists is None:
+        session.add(
+            Pricing(
+                kind=PricingKind.LLM.value,
+                provider=FAKE_PROVIDER,
+                model=FAKE_MODEL,
+                input_per_million_tokens=Decimal(0),
+                output_per_million_tokens=Decimal(0),
+                per_call=Decimal(0),
+                currency="USD",
+                effective_from=FAKE_PRICING_EFFECTIVE_FROM,
+            )
+        )
 
 
 def _create_employee(session: Session, registry: AgentRegistry, spec: dict[str, str]) -> AIEmployee:

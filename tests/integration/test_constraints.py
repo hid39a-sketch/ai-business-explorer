@@ -224,6 +224,7 @@ def _execution(stage_run: StageRun, employee: AIEmployee, role: str) -> Executio
         ai_employee_snapshot={},
         implementation_key="idea_generator",
         code_version="test",
+        cost_currency="USD",
     )
 
 

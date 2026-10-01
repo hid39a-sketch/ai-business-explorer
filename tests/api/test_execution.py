@@ -1,5 +1,7 @@
 """ステージ実行と実行履歴（成功・失敗）、バージョン追跡。"""
 
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -7,7 +9,13 @@ from ai_business_explorer.agents.registry import build_default_registry
 from ai_business_explorer.application.commands import ExplorationStageRunCommand
 from ai_business_explorer.application.stage_runs import StageRunService
 from ai_business_explorer.config import Settings
-from ai_business_explorer.infrastructure.db.models import Actor, Analysis, AuditEvent, Idea
+from ai_business_explorer.infrastructure.db.models import (
+    Actor,
+    Analysis,
+    AuditEvent,
+    Idea,
+    Pricing,
+)
 from ai_business_explorer.llm.base import LLMError
 from ai_business_explorer.llm.fake import FakeLLMClient
 from ai_business_explorer.prompts.loader import load_prompt
@@ -88,10 +96,22 @@ def test_archived_exploration_cannot_run(api: Api) -> None:
     api.post(f"/explorations/{exp['id']}/stage-runs", {}, expect=409)
 
 
-def test_unavailable_llm_provider_records_failed_execution(api: Api) -> None:
+def test_unavailable_llm_provider_records_failed_execution(api: Api, session: Session) -> None:
     exp = api.exploration()
     ig = next(e for e in api.items("/ai-employees") if e["key"] == "idea_generator")
     api.patch(f"/ai-employees/{ig['id']}", {"llm_config": {"provider": "openai", "model": "x"}})
+    # 単価のない LLM は費用を予算に計上できないので、起動しない（第2回仕様 10章）
+    api.post(f"/explorations/{exp['id']}/stage-runs", {}, expect=409)
+    session.add(
+        Pricing(
+            kind="llm",
+            provider="openai",
+            model="x",
+            currency="USD",
+            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+    session.commit()
     run = api.post(f"/explorations/{exp['id']}/stage-runs", {})
     assert run["status"] == "failed"
     ex = run["executions"][0]

@@ -44,6 +44,8 @@ PostgreSQL 16
 | 差し戻し、Human Review、Human Decision、Idea の採否 | reviewer 以上 |
 | AI社員の登録・更新（設定変更） | admin |
 | ステージ担当（primary / secondary）の設定変更 | admin |
+| 予算の設定 | admin（費用の集計・呼び出しのメタデータの閲覧は viewer） |
+| LLM ログの本文の閲覧 | admin |
 | 探索案件のデータ分類を下げる | admin（上げるのは member） |
 | ステージ実行の取り消し | member |
 
@@ -72,6 +74,24 @@ PostgreSQL 16
 - 実行時：受付の後に分類が上がった場合に備え、ワーカーは LLM を呼ぶ前にもう一度確認し、超えていれば LLM に送らずにその execution を `failed`（`validation_error`）にする。
 - 探索案件の分類を下げる変更は admin のみ（上げるのは member 以上）。Evidence の分類は登録時に決め、後から変えない（訂正は撤回＋新規登録）。撤回した Evidence は入力にならないので、分類の確認にも数えない。
 - 運用：機密性の高い資料を登録するときは、Evidence の `classification` を明示する。分類を誤って低く登録した場合は、その Evidence を撤回して正しい分類で登録し直す。
+
+### 費用管理（第2回仕様 10章）
+
+- 単価は `pricing`（LLM はプロバイダー × モデル、Tool は名前。組織共通）。単価の変更は新しい行で行い、履歴を残す。呼び出しの時点の単価で費用を計算し、使った単価の ID を記録する。Fake LLM の単価（0 USD）は seed が登録する。
+- 費用は LLM・Tool を呼ぶたびに `llm_calls` / `tool_calls` に記録してすぐ確定し、`executions.cost_amount` に加算する。取り消し・失敗・タイムアウトで終わった実行の費用も残り、予算に計上する（E-07）。通貨はプロバイダーの請求通貨のまま（R-21）。
+- 予算は月単位（UTC の暦月）。組織全体（`budgets` に行がなければ設定の既定値：月額 100 USD、hard）と、探索案件ごと（任意）。hard は超えたら止める、soft は止めない。
+- 1実行あたりの上限は AI社員の `llm_config`（`max_cost_per_execution`、`max_llm_calls`、`max_tool_calls`、`max_tokens`）。未指定なら設定の既定値（1 USD、各20回）。受け付けた時点の費用上限を `executions.cost_limit` に残す。
+- 起動時：各 AI社員の LLM に単価がない、単価の通貨が予算と違う場合は 409。残りの予算（上限 − 当月の費用 − 待機中・実行中の実行の確保分）が新しい実行の上限の合計より少なければ 409（`budget_exceeded`）。
+- 実行中：LLM・Tool を呼ぶ前に、回数・費用の上限と当月の予算を確認し、超えていれば以降を止めて `failed`（`budget_exceeded`）。呼び出しの後に費用の上限を超えた場合も `failed` にする（その呼び出しの費用は記録する）。
+- 運用：予算は `PUT /api/v1/budgets`（admin）で設定し、`GET /api/v1/costs?month=YYYY-MM` で当月の費用と予算の残りを確認する。実LLMの単価は、接続するとき（PR-9）に `pricing` に登録する。
+
+### LLM・Tool のログ（第2回仕様 12章・14章）
+
+- メタデータ（`llm_calls`・`tool_calls`）は永続。プロバイダー、モデル、Prompt の key / version / hash、トークン数、費用、応答時間、状態、エラー、プロバイダーのリクエストID、送ったデータの分類を持つ。
+- 本文（`llm_call_payloads`）は送ったメッセージと応答だけ。送ったデータの分類が public・internal なら保存し、confidential 以上は保存しない（R-16）。設定 `LLM_PAYLOAD_MODE=none` で全体を保存しないこともできる（既定より厳しくすることだけを許す）。閲覧は admin のみ。
+- API キー・認証ヘッダーなどの秘密情報は、どのログにも保存しない（リクエストの本文から組み立て、ヘッダーは記録しない）。
+- 本文の保存期間は 90日（R-20）。`make retention`（`python -m ai_business_explorer.retention`）を手動または cron から起動して消す。メタデータは残し、消した日時を `payload_deleted_at` に記録する。
+- Tool の生の出力と取得した本文の保存は、Tool 基盤（PR-7・PR-8）で追加する。
 
 ### 取り消し・タイムアウト・heartbeat
 

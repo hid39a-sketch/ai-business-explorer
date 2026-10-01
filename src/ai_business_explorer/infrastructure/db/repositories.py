@@ -21,6 +21,7 @@ from ai_business_explorer.infrastructure.db.models import (
     AIEmployee,
     Analysis,
     AuditEvent,
+    Budget,
     Claim,
     ClaimEvidenceLink,
     Evidence,
@@ -29,9 +30,11 @@ from ai_business_explorer.infrastructure.db.models import (
     HumanDecision,
     HumanReview,
     Idea,
+    LLMCall,
     OrganizationMembership,
     StageAssignment,
     StageRun,
+    ToolCall,
 )
 
 _ORGANIZATION_KEY = "organization_id"
@@ -287,3 +290,15 @@ class HumanDecisionRepository(Repository[HumanDecision]):
 
 class AuditEventRepository(Repository[AuditEvent]):
     model = AuditEvent
+
+
+class BudgetRepository(Repository[Budget]):
+    model = Budget
+
+
+class LLMCallRepository(Repository[LLMCall]):
+    model = LLMCall
+
+
+class ToolCallRepository(Repository[ToolCall]):
+    model = ToolCall
