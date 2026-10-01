@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from ai_business_explorer.api.v1.deps import ActorDep, AgentRegistryDep, SessionDep
+from ai_business_explorer.api.v1.deps import AdminDep, AgentRegistryDep, SessionDep
 from ai_business_explorer.api.v1.schemas import AIEmployeeOut
 from ai_business_explorer.application.ai_employees import AIEmployeeService
 from ai_business_explorer.application.commands import AIEmployeeCreate, AIEmployeeUpdate
@@ -10,9 +10,14 @@ from ai_business_explorer.application.commands import AIEmployeeCreate, AIEmploy
 router = APIRouter(prefix="/ai-employees", tags=["ai_employees"])
 
 
-@router.post("", response_model=AIEmployeeOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=AIEmployeeOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="AI社員を登録する（admin のみ）",
+)
 def create_ai_employee(
-    body: AIEmployeeCreate, actor: ActorDep, session: SessionDep, registry: AgentRegistryDep
+    body: AIEmployeeCreate, actor: AdminDep, session: SessionDep, registry: AgentRegistryDep
 ) -> object:
     return AIEmployeeService(session, registry).create(actor, body)
 
@@ -29,11 +34,13 @@ def get_ai_employee(employee_id: UUID, session: SessionDep, registry: AgentRegis
     return AIEmployeeService(session, registry).get(employee_id)
 
 
-@router.patch("/{employee_id}", response_model=AIEmployeeOut)
+@router.patch(
+    "/{employee_id}", response_model=AIEmployeeOut, summary="AI社員を更新する（admin のみ）"
+)
 def update_ai_employee(
     employee_id: UUID,
     body: AIEmployeeUpdate,
-    actor: ActorDep,
+    actor: AdminDep,
     session: SessionDep,
     registry: AgentRegistryDep,
 ) -> object:

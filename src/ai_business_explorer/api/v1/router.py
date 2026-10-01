@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from sqlalchemy import text
 
-from ai_business_explorer.api.v1.deps import SessionDep
+from ai_business_explorer.api.v1.deps import DbSessionDep
 from ai_business_explorer.api.v1.routers import (
     actors,
     ai_employees,
@@ -16,7 +16,8 @@ api_router = APIRouter(prefix="/api/v1")
 
 
 @api_router.get("/health", tags=["health"])
-def health(session: SessionDep) -> dict[str, str]:
+def health(session: DbSessionDep) -> dict[str, str]:
+    """死活確認。組織のデータを返さないので、操作者なしで呼べる。"""
     session.execute(text("SELECT 1"))
     return {"status": "ok"}
 

@@ -38,9 +38,10 @@ class IdeaService:
 
     def create(self, actor: Actor, exploration_id: UUID, cmd: IdeaCreate) -> Idea:
         require_human(actor, "create ideas")
-        self.explorations.get_or_raise(exploration_id)
+        exploration = self.explorations.get_or_raise(exploration_id)
         idea = self.ideas.add(
             Idea(
+                organization_id=exploration.organization_id,
                 exploration_id=exploration_id,
                 **cmd.model_dump(),
                 origin_type=OriginType.HUMAN.value,
@@ -50,6 +51,7 @@ class IdeaService:
         )
         record_audit(
             self.session,
+            organization_id=idea.organization_id,
             entity_type="idea",
             entity_id=idea.id,
             action="created",
@@ -77,6 +79,7 @@ class IdeaService:
             setattr(idea, field, value)
         record_audit(
             self.session,
+            organization_id=idea.organization_id,
             entity_type="idea",
             entity_id=idea.id,
             action="updated",
@@ -106,6 +109,7 @@ class IdeaService:
         idea.adoption_status = to.value
         record_audit(
             self.session,
+            organization_id=idea.organization_id,
             entity_type="idea",
             entity_id=idea.id,
             action=f"adoption_status.{to.value}",

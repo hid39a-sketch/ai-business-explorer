@@ -379,6 +379,7 @@ class StageRunService:
             "research_question": plan.research_question,
         }
         stage_run = StageRun(
+            organization_id=plan.exploration.organization_id,
             exploration_id=plan.exploration.id,
             idea_id=idea_id,
             stage_key=plan.stage.key,
@@ -403,6 +404,7 @@ class StageRunService:
         if employee.prompt_key and employee.prompt_version:
             prompt_hash = load_prompt(employee.prompt_key, employee.prompt_version).sha256
         execution = Execution(
+            organization_id=stage_run.organization_id,
             stage_run_id=stage_run.id,
             ai_employee_id=employee.id,
             idea_id=idea_id,
@@ -423,6 +425,7 @@ class StageRunService:
         action = "send_back" if plan.trigger is StageRunTrigger.SEND_BACK else "started"
         record_audit(
             self.session,
+            organization_id=stage_run.organization_id,
             entity_type="stage_run",
             entity_id=stage_run.id,
             action=action,
@@ -511,6 +514,7 @@ class StageRunService:
         previous = self.analyses.latest_for_stage(plan.exploration.id, idea_id, plan.stage.key)
         analysis = self.analyses.add(
             Analysis(
+                organization_id=plan.exploration.organization_id,
                 exploration_id=plan.exploration.id,
                 idea_id=idea_id,
                 stage_run_id=stage_run.id,
@@ -542,6 +546,7 @@ class StageRunService:
         for candidate in draft.idea_candidates:
             idea = self.ideas.add(
                 Idea(
+                    organization_id=plan.exploration.organization_id,
                     exploration_id=plan.exploration.id,
                     title=candidate.title,
                     summary=candidate.summary,
@@ -554,6 +559,7 @@ class StageRunService:
             created_ideas.append(idea)
             record_audit(
                 self.session,
+                organization_id=idea.organization_id,
                 entity_type="idea",
                 entity_id=idea.id,
                 action="created",
@@ -579,6 +585,7 @@ class StageRunService:
             self._recompute_current_stage(plan.idea)
         record_audit(
             self.session,
+            organization_id=stage_run.organization_id,
             entity_type="stage_run",
             entity_id=stage_run.id,
             action="succeeded",
@@ -605,6 +612,7 @@ class StageRunService:
                 self._recompute_current_stage(idea)
         record_audit(
             self.session,
+            organization_id=stage_run.organization_id,
             entity_type="stage_run",
             entity_id=stage_run.id,
             action="failed",

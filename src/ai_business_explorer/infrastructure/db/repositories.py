@@ -1,4 +1,10 @@
-"""Repository 層。サービスはここを通じて DB にアクセスする（AI社員はアクセスできない）。"""
+"""Repository 層。サービスはここを通じて DB にアクセスする（AI社員はアクセスできない）。
+
+組織の範囲:
+API はリクエストごとに `scope_to_organization` でセッションに操作者の組織を設定する。
+設定されたセッションでは、organization_id を持つモデルの取得・一覧はその組織に限られ、
+他組織の行は「存在しない」（NotFoundError → 404）として扱われる。
+"""
 
 from collections.abc import Sequence
 from typing import Any
@@ -21,8 +27,22 @@ from ai_business_explorer.infrastructure.db.models import (
     HumanDecision,
     HumanReview,
     Idea,
+    OrganizationMembership,
+    StageAssignment,
     StageRun,
 )
+
+_ORGANIZATION_KEY = "organization_id"
+
+
+def scope_to_organization(session: Session, organization_id: UUID) -> None:
+    """このセッションの取得・一覧を、指定した組織に限る。"""
+    session.info[_ORGANIZATION_KEY] = organization_id
+
+
+def scoped_organization_id(session: Session) -> UUID | None:
+    value = session.info.get(_ORGANIZATION_KEY)
+    return value if isinstance(value, UUID) else None
 
 
 class Repository[M: Base]:
@@ -32,7 +52,13 @@ class Repository[M: Base]:
         self.session = session
 
     def get(self, id_: UUID) -> M | None:
-        return self.session.get(self.model, id_)
+        obj = self.session.get(self.model, id_)
+        if obj is None:
+            return None
+        org_id = scoped_organization_id(self.session)
+        if org_id is not None and getattr(obj, "organization_id", org_id) != org_id:
+            return None
+        return obj
 
     def get_or_raise(self, id_: UUID) -> M:
         obj = self.get(id_)
@@ -46,20 +72,51 @@ class Repository[M: Base]:
         return obj
 
     def list_where(self, *criteria: ColumnElement[bool], order_by: Any = None) -> Sequence[M]:
-        stmt = select(self.model).where(*criteria)
+        stmt = select(self.model).where(*criteria, *self._organization_criteria())
         stmt = stmt.order_by(order_by if order_by is not None else self.model.created_at)  # type: ignore[attr-defined]
         return self.session.scalars(stmt).all()
+
+    def _organization_criteria(self) -> list[ColumnElement[bool]]:
+        org_id = scoped_organization_id(self.session)
+        column = getattr(self.model, "organization_id", None)
+        if org_id is None or column is None:
+            return []
+        return [column == org_id]
 
 
 class ActorRepository(Repository[Actor]):
     model = Actor
 
+    def list_in_organization(self, organization_id: UUID) -> Sequence[Actor]:
+        stmt = (
+            select(Actor)
+            .join(OrganizationMembership, OrganizationMembership.actor_id == Actor.id)
+            .where(OrganizationMembership.organization_id == organization_id)
+            .order_by(Actor.created_at)
+        )
+        return self.session.scalars(stmt).all()
+
+
+class OrganizationMembershipRepository(Repository[OrganizationMembership]):
+    model = OrganizationMembership
+
+    def for_actor(self, actor_id: UUID) -> OrganizationMembership | None:
+        stmt = select(OrganizationMembership).where(OrganizationMembership.actor_id == actor_id)
+        return self.session.scalars(stmt).one_or_none()
+
 
 class AIEmployeeRepository(Repository[AIEmployee]):
     model = AIEmployee
 
-    def get_by_key(self, key: str) -> AIEmployee | None:
-        return self.session.scalars(select(AIEmployee).where(AIEmployee.key == key)).one_or_none()
+    def get_by_key(self, organization_id: UUID, key: str) -> AIEmployee | None:
+        stmt = select(AIEmployee).where(
+            AIEmployee.organization_id == organization_id, AIEmployee.key == key
+        )
+        return self.session.scalars(stmt).one_or_none()
+
+
+class StageAssignmentRepository(Repository[StageAssignment]):
+    model = StageAssignment
 
 
 class ExplorationRepository(Repository[Exploration]):

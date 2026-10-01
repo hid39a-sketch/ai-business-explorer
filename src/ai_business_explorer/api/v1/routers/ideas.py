@@ -4,8 +4,9 @@ from uuid import UUID
 from fastapi import APIRouter, status
 
 from ai_business_explorer.api.v1.deps import (
-    ActorDep,
     AgentRegistryDep,
+    MemberDep,
+    ReviewerDep,
     SessionDep,
     SettingsDep,
     ToolRegistryDep,
@@ -49,25 +50,35 @@ def get_idea(idea_id: UUID, session: SessionDep) -> object:
     return idea_out(service, service.get(idea_id))
 
 
-@router.patch("/{idea_id}", response_model=IdeaOut, summary="Idea の詳細項目を更新する（人間のみ）")
-def update_idea(idea_id: UUID, body: IdeaUpdate, actor: ActorDep, session: SessionDep) -> object:
+@router.patch(
+    "/{idea_id}",
+    response_model=IdeaOut,
+    summary="Idea の詳細項目を更新する（member 以上の人間のみ）",
+)
+def update_idea(idea_id: UUID, body: IdeaUpdate, actor: MemberDep, session: SessionDep) -> object:
     service = IdeaService(session)
     return idea_out(service, service.update(actor, idea_id, body))
 
 
-@router.post("/{idea_id}/adopt", response_model=IdeaOut, summary="candidate → adopted（人間のみ）")
+@router.post(
+    "/{idea_id}/adopt",
+    response_model=IdeaOut,
+    summary="candidate → adopted（reviewer 以上の人間のみ）",
+)
 def adopt_idea(
-    idea_id: UUID, body: IdeaAdoptionCommand, actor: ActorDep, session: SessionDep
+    idea_id: UUID, body: IdeaAdoptionCommand, actor: ReviewerDep, session: SessionDep
 ) -> object:
     service = IdeaService(session)
     return idea_out(service, service.adopt(actor, idea_id, body))
 
 
 @router.post(
-    "/{idea_id}/reject", response_model=IdeaOut, summary="candidate → rejected（人間のみ）"
+    "/{idea_id}/reject",
+    response_model=IdeaOut,
+    summary="candidate → rejected（reviewer 以上の人間のみ）",
 )
 def reject_idea(
-    idea_id: UUID, body: IdeaAdoptionCommand, actor: ActorDep, session: SessionDep
+    idea_id: UUID, body: IdeaAdoptionCommand, actor: ReviewerDep, session: SessionDep
 ) -> object:
     service = IdeaService(session)
     return idea_out(service, service.reject(actor, idea_id, body))
@@ -77,12 +88,12 @@ def reject_idea(
     "/{idea_id}/stage-runs",
     response_model=StageRunDetailOut,
     status_code=status.HTTP_201_CREATED,
-    summary="アイデア単位のステージを実行・再実行する（人間のみ）",
+    summary="アイデア単位のステージを実行・再実行する（member 以上の人間のみ）",
 )
 def run_idea_stage(
     idea_id: UUID,
     body: IdeaStageRunCommand,
-    actor: ActorDep,
+    actor: MemberDep,
     session: SessionDep,
     settings: SettingsDep,
     agents: AgentRegistryDep,
@@ -96,12 +107,12 @@ def run_idea_stage(
     "/{idea_id}/send-back",
     response_model=StageRunDetailOut,
     status_code=status.HTTP_201_CREATED,
-    summary="前のステージへ差し戻して再実行する（人間のみ）",
+    summary="前のステージへ差し戻して再実行する（reviewer 以上の人間のみ）",
 )
 def send_back(
     idea_id: UUID,
     body: SendBackCommand,
-    actor: ActorDep,
+    actor: ReviewerDep,
     session: SessionDep,
     settings: SettingsDep,
     agents: AgentRegistryDep,
@@ -136,10 +147,10 @@ def list_idea_analyses(idea_id: UUID, session: SessionDep) -> object:
     "/{idea_id}/human-decisions",
     response_model=HumanDecisionOut,
     status_code=status.HTTP_201_CREATED,
-    summary="人間による最終的な事業判断を記録する（人間のみ）",
+    summary="人間による最終的な事業判断を記録する（reviewer 以上の人間のみ）",
 )
 def create_human_decision(
-    idea_id: UUID, body: HumanDecisionCreate, actor: ActorDep, session: SessionDep
+    idea_id: UUID, body: HumanDecisionCreate, actor: ReviewerDep, session: SessionDep
 ) -> object:
     return DecisionService(session).create(actor, idea_id, body)
 

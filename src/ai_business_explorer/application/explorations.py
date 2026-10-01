@@ -4,7 +4,12 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from ai_business_explorer.application.commands import ExplorationCreate, ExplorationUpdate
-from ai_business_explorer.application.common import record_audit, require_human, snapshot
+from ai_business_explorer.application.common import (
+    current_organization_id,
+    record_audit,
+    require_human,
+    snapshot,
+)
 from ai_business_explorer.infrastructure.db.models import Actor, Exploration
 from ai_business_explorer.infrastructure.db.repositories import ExplorationRepository
 
@@ -19,10 +24,15 @@ class ExplorationService:
     def create(self, actor: Actor, cmd: ExplorationCreate) -> Exploration:
         require_human(actor, "create explorations")
         exploration = self.explorations.add(
-            Exploration(**cmd.model_dump(), created_by_actor_id=actor.id)
+            Exploration(
+                **cmd.model_dump(),
+                organization_id=current_organization_id(self.session),
+                created_by_actor_id=actor.id,
+            )
         )
         record_audit(
             self.session,
+            organization_id=exploration.organization_id,
             entity_type="exploration",
             entity_id=exploration.id,
             action="created",
@@ -49,6 +59,7 @@ class ExplorationService:
             setattr(exploration, field, value)
         record_audit(
             self.session,
+            organization_id=exploration.organization_id,
             entity_type="exploration",
             entity_id=exploration.id,
             action="updated",

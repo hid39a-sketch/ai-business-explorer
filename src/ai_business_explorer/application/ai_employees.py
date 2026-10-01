@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 
 from ai_business_explorer.agents.registry import AgentRegistry
 from ai_business_explorer.application.commands import AIEmployeeCreate, AIEmployeeUpdate
-from ai_business_explorer.application.common import record_audit, require_human, snapshot
+from ai_business_explorer.application.common import (
+    current_organization_id,
+    record_audit,
+    require_human,
+    snapshot,
+)
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
 from ai_business_explorer.domain.stages import get_stage
 from ai_business_explorer.infrastructure.db.models import Actor, AIEmployee
@@ -41,10 +46,12 @@ class AIEmployeeService:
 
     def create(self, actor: Actor, cmd: AIEmployeeCreate) -> AIEmployee:
         require_human(actor, "register AI employees")
-        if self.employees.get_by_key(cmd.key) is not None:
+        organization_id = current_organization_id(self.session)
+        if self.employees.get_by_key(organization_id, cmd.key) is not None:
             raise InvalidStateError(f"ai_employee key already exists: {cmd.key}")
         employee = AIEmployee(
             **cmd.model_dump(exclude={"llm_config", "status"}),
+            organization_id=organization_id,
             llm_config=cmd.llm_config.model_dump(),
             status=cmd.status.value,
             version=1,
@@ -53,6 +60,7 @@ class AIEmployeeService:
         self.employees.add(employee)
         record_audit(
             self.session,
+            organization_id=employee.organization_id,
             entity_type="ai_employee",
             entity_id=employee.id,
             action="created",
@@ -87,6 +95,7 @@ class AIEmployeeService:
         employee.version += 1
         record_audit(
             self.session,
+            organization_id=employee.organization_id,
             entity_type="ai_employee",
             entity_id=employee.id,
             action="updated",

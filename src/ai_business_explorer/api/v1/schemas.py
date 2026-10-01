@@ -20,6 +20,7 @@ class ActorOut(_Out):
 
 class AIEmployeeOut(_Out):
     id: UUID
+    organization_id: UUID
     key: str
     name: str
     role: str
@@ -41,6 +42,7 @@ class AIEmployeeOut(_Out):
 
 class ExplorationOut(_Out):
     id: UUID
+    organization_id: UUID
     title: str
     theme: str
     description: str | None
@@ -58,6 +60,7 @@ class ResearchStatusOut(BaseModel):
 
 class IdeaOut(_Out):
     id: UUID
+    organization_id: UUID
     exploration_id: UUID
     title: str
     summary: str | None
@@ -88,6 +91,7 @@ class IdeaOut(_Out):
 
 class EvidenceOut(_Out):
     id: UUID
+    organization_id: UUID
     exploration_id: UUID
     idea_id: UUID | None
     source_type: str
@@ -107,6 +111,7 @@ class EvidenceOut(_Out):
 
 class ExecutionOut(_Out):
     id: UUID
+    organization_id: UUID
     stage_run_id: UUID
     ai_employee_id: UUID
     idea_id: UUID | None
@@ -133,6 +138,7 @@ class ExecutionOut(_Out):
 
 class StageRunOut(_Out):
     id: UUID
+    organization_id: UUID
     exploration_id: UUID
     idea_id: UUID | None
     stage_key: str
@@ -156,6 +162,7 @@ class StageRunDetailOut(StageRunOut):
 
 class AnalysisOut(_Out):
     id: UUID
+    organization_id: UUID
     exploration_id: UUID
     idea_id: UUID | None
     stage_run_id: UUID
@@ -178,6 +185,7 @@ class EvidenceLinkOut(_Out):
 
 class HumanReviewOut(_Out):
     id: UUID
+    organization_id: UUID
     analysis_id: UUID
     exploration_id: UUID
     idea_id: UUID | None
@@ -195,6 +203,7 @@ class AnalysisDetailOut(AnalysisOut):
 
 class HumanDecisionOut(_Out):
     id: UUID
+    organization_id: UUID
     idea_id: UUID
     decided_by_actor_id: UUID
     decision: str

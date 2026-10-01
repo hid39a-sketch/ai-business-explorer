@@ -16,11 +16,17 @@ from ai_business_explorer.infrastructure.db.models import (
     Idea,
     StageRun,
 )
+from ai_business_explorer.seed import DEFAULT_ORGANIZATION_ID
 
 
 @pytest.fixture
 def exploration(session: Session, human: Actor) -> Exploration:
-    e = Exploration(title="t", theme="theme", created_by_actor_id=human.id)
+    e = Exploration(
+        organization_id=DEFAULT_ORGANIZATION_ID,
+        title="t",
+        theme="theme",
+        created_by_actor_id=human.id,
+    )
     session.add(e)
     session.commit()
     return e
@@ -28,7 +34,12 @@ def exploration(session: Session, human: Actor) -> Exploration:
 
 @pytest.fixture
 def idea(session: Session, exploration: Exploration) -> Idea:
-    i = Idea(exploration_id=exploration.id, title="idea", origin_type="human")
+    i = Idea(
+        organization_id=exploration.organization_id,
+        exploration_id=exploration.id,
+        title="idea",
+        origin_type="human",
+    )
     session.add(i)
     session.commit()
     return i
@@ -47,6 +58,7 @@ def test_human_decision_rejects_non_human_actor(
     _assert_rejected(
         session,
         lambda: HumanDecision(
+            organization_id=idea.organization_id,
             idea_id=idea.id,
             decided_by_actor_id=system_actor.id,
             decided_by_actor_type="system",
@@ -63,6 +75,7 @@ def test_human_decision_rejects_spoofed_actor_type(
     _assert_rejected(
         session,
         lambda: HumanDecision(
+            organization_id=idea.organization_id,
             idea_id=idea.id,
             decided_by_actor_id=system_actor.id,
             decided_by_actor_type="human",
@@ -78,6 +91,7 @@ def test_stage_run_must_be_triggered_by_human(
     _assert_rejected(
         session,
         lambda: StageRun(
+            organization_id=exploration.organization_id,
             exploration_id=exploration.id,
             stage_key="idea_generation",
             attempt_no=1,
@@ -96,6 +110,7 @@ def test_stage_run_scope_must_match_stage(
     _assert_rejected(
         session,
         lambda: StageRun(
+            organization_id=exploration.organization_id,
             exploration_id=exploration.id,
             idea_id=None,
             stage_key="market_research",
@@ -115,6 +130,7 @@ def test_evidence_rejects_ai_generated_source_type(
     _assert_rejected(
         session,
         lambda: Evidence(
+            organization_id=exploration.organization_id,
             exploration_id=exploration.id,
             source_type="ai_generated",
             title="AI summary",
@@ -128,7 +144,13 @@ def test_ai_origin_idea_requires_origin_analysis(
     session: Session, exploration: Exploration
 ) -> None:
     _assert_rejected(
-        session, lambda: Idea(exploration_id=exploration.id, title="x", origin_type="ai")
+        session,
+        lambda: Idea(
+            organization_id=exploration.organization_id,
+            exploration_id=exploration.id,
+            title="x",
+            origin_type="ai",
+        ),
     )
 
 
@@ -136,6 +158,7 @@ def test_invalid_adoption_status_rejected(session: Session, exploration: Explora
     _assert_rejected(
         session,
         lambda: Idea(
+            organization_id=exploration.organization_id,
             exploration_id=exploration.id,
             title="x",
             origin_type="human",
@@ -156,6 +179,7 @@ def test_evidence_retraction_requires_reason(
     _assert_rejected(
         session,
         lambda: Evidence(
+            organization_id=exploration.organization_id,
             exploration_id=exploration.id,
             source_type="human_input",
             title="x",
