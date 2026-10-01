@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     llm_payload_mode: PayloadMode = PayloadMode.FULL
     # 保存期間（R-20）。期限を過ぎた本文は retention コマンドで消す
     llm_payload_retention_days: int = 90
+    # Tool の生の出力は 90日、Tool で取得した全文（候補のスナップショット）は 180日（R-20）
+    tool_output_retention_days: int = 90
+    tool_snapshot_retention_days: int = 180
 
     def llm_send_limit(self, provider: str) -> DataClassification:
         limit = DataClassification(

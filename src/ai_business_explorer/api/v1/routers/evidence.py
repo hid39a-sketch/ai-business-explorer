@@ -9,6 +9,7 @@ from ai_business_explorer.api.v1.schemas import (
     EvidenceOut,
     EvidenceWarningOut,
     PageOut,
+    ProvenanceOut,
 )
 from ai_business_explorer.application.commands import (
     EvidenceCreate,
@@ -18,12 +19,26 @@ from ai_business_explorer.application.commands import (
 from ai_business_explorer.application.evidence import EvidenceService
 from ai_business_explorer.application.pagination import Page
 from ai_business_explorer.domain.evidence import EvidenceState
-from ai_business_explorer.infrastructure.db.models import Evidence
+from ai_business_explorer.infrastructure.db.models import Evidence, ToolCall
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 
 
-def _with_state(evidence: Evidence, state: EvidenceState) -> EvidenceOut:
+def _provenance(evidence: Evidence, call: ToolCall | None) -> ProvenanceOut:
+    return ProvenanceOut(
+        acquisition_method=evidence.acquisition_method,
+        registered_by_actor_id=evidence.created_by_actor_id,
+        candidate_id=evidence.candidate_id,
+        execution_id=evidence.execution_id,
+        tool_call_id=evidence.tool_call_id,
+        tool_name=call.tool_name if call else None,
+        tool_version=call.tool_version if call else None,
+        tool_input=call.input if call else None,
+        retrieved_at=evidence.retrieved_at,
+    )
+
+
+def _with_state(evidence: Evidence, state: EvidenceState, call: ToolCall | None) -> EvidenceOut:
     return EvidenceOut.model_validate(evidence).model_copy(
         update={
             "evidence_status": state.status.value,
@@ -31,13 +46,18 @@ def _with_state(evidence: Evidence, state: EvidenceState) -> EvidenceOut:
             "is_superseded": state.is_superseded,
             "is_purged": state.is_purged,
             "superseded_by_id": state.superseded_by_id,
+            "provenance": _provenance(evidence, call),
         }
     )
 
 
 def evidence_outs(service: EvidenceService, evidence: Sequence[Evidence]) -> list[EvidenceOut]:
     states = service.states(evidence)
-    return [_with_state(e, states[e.id]) for e in evidence]
+    calls = service.tool_calls_for(evidence)
+    return [
+        _with_state(e, states[e.id], calls.get(e.tool_call_id) if e.tool_call_id else None)
+        for e in evidence
+    ]
 
 
 def evidence_page(service: EvidenceService, page: Page[Evidence]) -> PageOut[EvidenceOut]:

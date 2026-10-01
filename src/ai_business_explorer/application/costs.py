@@ -23,12 +23,14 @@ from uuid import UUID
 from sqlalchemy import Select, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
+from ai_business_explorer.application.candidates import store_tool_candidates
 from ai_business_explorer.application.commands import BudgetSet
 from ai_business_explorer.application.common import (
     current_organization_id,
     record_audit,
     require_human,
     snapshot,
+    to_jsonable,
     utcnow,
 )
 from ai_business_explorer.application.pagination import Page, PageRequest, paginate
@@ -57,6 +59,7 @@ from ai_business_explorer.infrastructure.db.models import (
     Pricing,
     StageRun,
     ToolCall,
+    ToolCallOutput,
 )
 from ai_business_explorer.infrastructure.db.repositories import (
     BudgetRepository,
@@ -576,32 +579,46 @@ class ExecutionMeter:
         result: ToolResult | None,
         error: BaseException | None,
         latency_ms: int,
-    ) -> None:
+    ) -> ToolResult | None:
         # Tool の単価がなければ費用 0（内部の読み取り専用 Tool。外部 Tool は単価を登録する）
         pricing = find_pricing(self.session, PricingKind.TOOL, tool.name, "", utcnow())
         cost = money(pricing.per_call) if pricing else Decimal(0)
-        self.session.add(
-            ToolCall(
-                organization_id=self.execution.organization_id,
-                execution_id=self.execution.id,
-                tool_name=tool.name,
-                tool_version=tool.version,
-                side_effect=tool.side_effect.value,
-                input=tool_input,
-                urls=[c.url for c in result.evidence_candidates if c.url] if result else [],
-                cost_amount=cost,
-                currency=pricing.currency if pricing else self.execution.cost_currency,
-                pricing_id=pricing.id if pricing else None,
-                latency_ms=latency_ms,
-                status=(CallStatus.FAILED if error else CallStatus.SUCCEEDED).value,
-                error_type=_call_error_type(error),
-                error_message=str(error)[:MAX_ERROR_MESSAGE] if error else None,
-            )
+        call = ToolCall(
+            organization_id=self.execution.organization_id,
+            execution_id=self.execution.id,
+            tool_name=tool.name,
+            tool_version=tool.version,
+            side_effect=tool.side_effect.value,
+            input=tool_input,
+            urls=[c.url for c in result.evidence_candidates if c.url] if result else [],
+            cost_amount=cost,
+            currency=pricing.currency if pricing else self.execution.cost_currency,
+            pricing_id=pricing.id if pricing else None,
+            latency_ms=latency_ms,
+            status=(CallStatus.FAILED if error else CallStatus.SUCCEEDED).value,
+            error_type=_call_error_type(error),
+            error_message=str(error)[:MAX_ERROR_MESSAGE] if error else None,
         )
+        self.session.add(call)
+        self.session.flush()
+        recorded: ToolResult | None = None
+        if result is not None:
+            # 生の出力は本文として別に保存し（90日で消す）、取得した情報は Evidence 候補にする
+            self.session.add(
+                ToolCallOutput(
+                    organization_id=call.organization_id,
+                    tool_call_id=call.id,
+                    output=to_jsonable(result.output),
+                )
+            )
+            recorded = store_tool_candidates(
+                self.session, self.execution, self.exploration_id, call, result
+            )
         self._add_cost(cost)
         self.session.commit()
         if error is None:
             self._check_cost_after_call()
+        return recorded
 
 
 class _MeteredLLMClient:

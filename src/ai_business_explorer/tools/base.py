@@ -8,6 +8,7 @@
 
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, ClassVar, Protocol
 from uuid import UUID
@@ -32,11 +33,25 @@ class ToolNotAllowedError(ToolError):
 
 
 class EvidenceCandidate(BaseModel):
+    """Tool が外部から取得した原情報（第2回仕様 2章・B-21）。AI が書いた文章は入れない。
+
+    candidate_id は保存したときに仕組みが付ける（Tool は指定しない）。AI社員は、AI生成の補助情報を
+    付けるときにこの ID で候補を指す。
+    """
+
     source_type: str
     title: str
     url: str | None = None
+    # 出典の同一性。省略すると URL を正規化して使う
+    source_key: str | None = None
+    # 取得した本文の抜粋（最大 2,000字）と全文
     quote: str | None = None
+    snapshot: str | None = None
+    published_at: datetime | None = None
+    # 取得日時。省略すると Tool を呼んだ日時
+    retrieved_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    candidate_id: UUID | None = None
 
 
 class ToolResult(BaseModel):
@@ -97,8 +112,11 @@ class ToolCallRecorder(Protocol):
         result: "ToolResult | None",
         error: BaseException | None,
         latency_ms: int,
-    ) -> None:
-        """呼び出しの後（成功・失敗とも）。費用とメタデータを記録する。"""
+    ) -> "ToolResult | None":
+        """呼び出しの後（成功・失敗とも）。費用・メタデータ・Evidence 候補を記録する。
+
+        成功時は、候補に candidate_id を付けた結果を返す（AI社員にはこれを渡す）。
+        """
 
 
 class ToolBox:
@@ -152,7 +170,9 @@ class ToolBox:
             raise
         if self._recorder is not None:
             elapsed = int((time.monotonic() - started) * 1000)
-            self._recorder.after_tool_call(tool, tool_input, result, None, elapsed)
+            recorded = self._recorder.after_tool_call(tool, tool_input, result, None, elapsed)
+            if recorded is not None:
+                result = recorded
         return result
 
 

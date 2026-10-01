@@ -40,6 +40,7 @@ from ai_business_explorer.agents.base import (
     Claim as AgentClaim,
 )
 from ai_business_explorer.agents.registry import AgentRegistry
+from ai_business_explorer.application.candidates import store_ai_notes
 from ai_business_explorer.application.commands import (
     ExplorationStageRunCommand,
     IdeaStageRunCommand,
@@ -72,6 +73,7 @@ from ai_business_explorer.domain.enums import (
     ReviewStatus,
     RunStatus,
     StageAssignmentRole,
+    StageRunMode,
     StageRunTrigger,
     highest_classification,
 )
@@ -98,6 +100,8 @@ from ai_business_explorer.infrastructure.db.models import (
     Claim,
     ClaimEvidenceLink,
     Evidence,
+    EvidenceCandidate,
+    EvidenceCandidateAINote,
     Execution,
     Exploration,
     Idea,
@@ -142,6 +146,7 @@ class _Plan:
     trigger: StageRunTrigger
     members: list[_Member]  # primary が先頭
     research_question: str | None
+    mode: StageRunMode = StageRunMode.ANALYZE
     rerun_of_id: UUID | None = None
     sent_back_from_id: UUID | None = None
     reason: str | None = None
@@ -218,7 +223,7 @@ class StageRunService:
         require_human(actor, "run stages")
         exploration = self._active_exploration(exploration_id)
         stage = get_stage(IDEA_GENERATION)
-        trigger = self._check_rerun(exploration.id, None, stage, cmd.rerun_of_id)
+        trigger = self._check_trigger(exploration.id, None, stage, cmd)
         plan = _Plan(
             exploration=exploration,
             idea=None,
@@ -228,6 +233,7 @@ class StageRunService:
                 exploration, stage, cmd.ai_employee_id, cmd.secondary_ai_employee_ids
             ),
             research_question=cmd.research_question,
+            mode=cmd.mode,
             rerun_of_id=cmd.rerun_of_id,
         )
         return self._start(actor, plan)
@@ -238,7 +244,7 @@ class StageRunService:
         exploration = self._active_exploration(idea.exploration_id)
         stage = self._idea_stage(cmd.stage_key)
         self._check_idea_prerequisites(idea, stage)
-        trigger = self._check_rerun(exploration.id, idea.id, stage, cmd.rerun_of_id)
+        trigger = self._check_trigger(exploration.id, idea.id, stage, cmd)
         plan = _Plan(
             exploration=exploration,
             idea=idea,
@@ -248,6 +254,7 @@ class StageRunService:
                 exploration, stage, cmd.ai_employee_id, cmd.secondary_ai_employee_ids
             ),
             research_question=cmd.research_question,
+            mode=cmd.mode,
             rerun_of_id=cmd.rerun_of_id,
         )
         return self._start(actor, plan)
@@ -372,6 +379,20 @@ class StageRunService:
         prev_run = self.stage_runs.current(idea.exploration_id, idea.id, prev.key)
         if prev_run is None or prev_run.status != RunStatus.SUCCEEDED.value:
             raise InvalidStateError(f"previous stage '{prev.key}' has no succeeded run")
+
+    def _check_trigger(
+        self,
+        exploration_id: UUID,
+        idea_id: UUID | None,
+        stage: StageDefinition,
+        cmd: ExplorationStageRunCommand,
+    ) -> StageRunTrigger:
+        if cmd.mode is StageRunMode.COLLECT_ONLY:
+            # collect_only は「最新の試行」に数えないので、再実行の指定はない（毎回新しく集める）
+            if cmd.rerun_of_id is not None:
+                raise DomainValidationError("collect_only runs cannot have rerun_of_id")
+            return StageRunTrigger.INITIAL
+        return self._check_rerun(exploration_id, idea_id, stage, cmd.rerun_of_id)
 
     def _check_rerun(
         self,
@@ -568,6 +589,7 @@ class StageRunService:
                 plan.exploration.id, idea_id, plan.stage.key
             ),
             trigger=plan.trigger.value,
+            mode=plan.mode.value,
             rerun_of_id=plan.rerun_of_id,
             sent_back_from_id=plan.sent_back_from_id,
             reason=plan.reason,
@@ -619,6 +641,7 @@ class StageRunService:
             after={
                 "stage_key": plan.stage.key,
                 "trigger": plan.trigger.value,
+                "mode": plan.mode.value,
                 "idea_id": idea_id,
                 "rerun_of_id": plan.rerun_of_id,
                 "sent_back_from_id": plan.sent_back_from_id,
@@ -756,6 +779,7 @@ class StageRunService:
                 llm_model=model,
                 tools=tools,
                 prompt=prompt,
+                mode=stage_run.mode,
             )
             draft = agent.run(ctx)
             self._validate_draft(draft, stage, {e.id for e in evidence})
@@ -842,6 +866,18 @@ class StageRunService:
         llm: TrackingLLMClient,
         tools: ToolBox,
     ) -> None:
+        execution.llm_model = llm.last_model or execution.llm_model
+        # AI生成の補助情報は候補とは別に保存する（この実行が集めた候補だけを参照できる。B-21）
+        notes = store_ai_notes(
+            self.session, execution, [(n.candidate_id, n.note) for n in draft.candidate_notes]
+        )
+        candidate_ids = self.session.scalars(
+            select(EvidenceCandidate.id).where(EvidenceCandidate.execution_id == execution.id)
+        ).all()
+        if stage_run.mode == StageRunMode.COLLECT_ONLY.value:
+            # 収集のみ：分析・主張・Idea 候補は作らない（第2回仕様 2章・E-02）
+            self._complete_execution(execution, llm, tools, None, [], candidate_ids, notes)
+            return
         previous = self.analyses.latest_for_stage(
             stage_run.exploration_id, stage_run.idea_id, stage_run.stage_key, employee.id
         )
@@ -916,12 +952,33 @@ class StageRunService:
                         "adoption_status": "candidate",
                     },
                 )
+        self._complete_execution(
+            execution,
+            llm,
+            tools,
+            analysis.id,
+            [i.id for i in created_ideas],
+            candidate_ids,
+            notes,
+        )
+
+    def _complete_execution(
+        self,
+        execution: Execution,
+        llm: TrackingLLMClient,
+        tools: ToolBox,
+        analysis_id: UUID | None,
+        idea_ids: Sequence[UUID],
+        candidate_ids: Sequence[UUID],
+        notes: Sequence[EvidenceCandidateAINote],
+    ) -> None:
         execution.status = RunStatus.SUCCEEDED.value
-        execution.llm_model = llm.last_model or execution.llm_model
         execution.output = to_jsonable(
             {
-                "analysis_id": analysis.id,
-                "idea_ids": [i.id for i in created_ideas],
+                "analysis_id": analysis_id,
+                "idea_ids": list(idea_ids),
+                "candidate_ids": list(candidate_ids),
+                "ai_note_ids": [n.id for n in notes],
                 "tool_calls": [c.model_dump() for c in tools.calls],
             }
         )

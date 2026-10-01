@@ -100,11 +100,22 @@ class IdeaCandidate(BaseModel):
     problem: str | None = None
 
 
+class CandidateNote(BaseModel):
+    """AI生成の補助情報（第2回仕様 2章・B-21）。Evidence 候補の原情報にも Evidence にもならない。
+
+    candidate_id は、この実行で Tool が返した候補の ID（ToolResult の候補に付いている）。
+    """
+
+    candidate_id: UUID
+    note: str = Field(min_length=1, max_length=10_000)
+
+
 class AnalysisDraft(BaseModel):
     summary: str = Field(min_length=1)
     claims: list[Claim] = Field(default_factory=list)
     data: dict[str, Any] = Field(default_factory=dict)
     idea_candidates: list[IdeaCandidate] = Field(default_factory=list)
+    candidate_notes: list[CandidateNote] = Field(default_factory=list)
 
 
 class AgentContext:
@@ -122,6 +133,7 @@ class AgentContext:
         llm_model: str,
         tools: ToolBox,
         prompt: PromptTemplate,
+        mode: str = "analyze",
     ) -> None:
         self.exploration = exploration
         self.idea = idea
@@ -132,6 +144,8 @@ class AgentContext:
         self.llm_model = llm_model
         self.tools = tools
         self.prompt = prompt
+        # analyze / collect_only（collect_only では分析は保存されず、候補と補助情報だけが残る）
+        self.mode = mode
 
 
 class AgentOutputError(Exception):

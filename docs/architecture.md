@@ -75,6 +75,17 @@ PostgreSQL 16
 - 探索案件の分類を下げる変更は admin のみ（上げるのは member 以上）。Evidence の分類は登録時に決め、後から変えない（訂正は撤回＋新規登録）。撤回した Evidence は入力にならないので、分類の確認にも数えない。
 - 運用：機密性の高い資料を登録するときは、Evidence の `classification` を明示する。分類を誤って低く登録した場合は、その Evidence を撤回して正しい分類で登録し直す。
 
+### Evidence 候補と収集のみ（第2回仕様 2章・3章・4章）
+
+- Tool が取得した情報は、まず `evidence_candidates`（候補）に保存する。候補が持つのは原情報（URL・title・取得日時・メタデータ・抜粋（最大 2,000字）・全文）だけ。AI が書いた要約・解釈は `evidence_candidate_ai_notes`（AI生成の補助情報）に分け、元の候補と生成した実行を必ず参照する（B-21）。
+- 候補の状態は `pending → accepted / rejected / duplicate`。承認・却下は member 以上の人間だけ（却下は理由必須）。承認すると Evidence が作られ、承認した人間が登録者（`created_by_actor_id`）になる。人間の要約（`summary`）は承認時に受け取り、原情報（`quote`）と分けて保存する。承認は補助情報を読まないので、補助情報が Evidence に移る経路はない。
+- 重複判定：同じ探索案件に `source_key` と `snapshot_hash` が同じ active な Evidence があれば `duplicate`（承認不要）。`source_key` だけが同じなら更新版の候補（`updates_evidence_id`）で、承認すると前の版を置き換える（前の版は superseded。撤回ではない）。判定は候補を作るときと承認するときの両方で行う。
+- Tool 取得の Evidence は来歴（`acquisition_method = tool`、`candidate_id`、`tool_call_id`、`execution_id`、`retrieved_at`）を必ず持ち、応答の `provenance` に取得方法・Tool 名・検索語・登録した人間をまとめて返す。
+- 未承認の候補と補助情報は、AI の入力にも根拠にもならない。
+- ステージ実行の `mode`：`analyze`（既定）と `collect_only`。collect_only は Tool で候補を集めるだけで分析・主張・Idea 候補を作らない。LLM を使ってよく、費用は記録する。「最新の試行は1つ」の制約・再実行・後続の入力には数えない。基本の流れは ① collect_only で集める → ② 人間が承認する → ③ analyze で分析する。
+- 保存期間（R-20）：Tool の生の出力（`tool_call_outputs`）は 90日、候補の全文は 180日で `make retention` が消す。抜粋・ハッシュ・来歴は残す。
+- 組織ごとの自動承認ポリシー、duplicate を pending に戻す操作（E-03）は第2回では作らない。
+
 ### 費用管理（第2回仕様 10章）
 
 - 単価は `pricing`（LLM はプロバイダー × モデル、Tool は名前。組織共通）。単価の変更は新しい行で行い、履歴を残す。呼び出しの時点の単価で費用を計算し、使った単価の ID を記録する。Fake LLM の単価（0 USD）は seed が登録する。
@@ -91,7 +102,7 @@ PostgreSQL 16
 - 本文（`llm_call_payloads`）は送ったメッセージと応答だけ。送ったデータの分類が public・internal なら保存し、confidential 以上は保存しない（R-16）。設定 `LLM_PAYLOAD_MODE=none` で全体を保存しないこともできる（既定より厳しくすることだけを許す）。閲覧は admin のみ。
 - API キー・認証ヘッダーなどの秘密情報は、どのログにも保存しない（リクエストの本文から組み立て、ヘッダーは記録しない）。
 - 本文の保存期間は 90日（R-20）。`make retention`（`python -m ai_business_explorer.retention`）を手動または cron から起動して消す。メタデータは残し、消した日時を `payload_deleted_at` に記録する。
-- Tool の生の出力と取得した本文の保存は、Tool 基盤（PR-7・PR-8）で追加する。
+- Tool の生の出力は `tool_call_outputs` に、取得した本文は Evidence 候補のスナップショットに保存する（上記）。
 
 ### 取り消し・タイムアウト・heartbeat
 
@@ -113,6 +124,7 @@ PostgreSQL 16
 | Idea の採用・却下 | reviewer 以上 | `require_human` | （監査ログに記録） |
 | Idea の更新 | member 以上 | `require_human` | （監査ログに記録） |
 | Evidence の登録・撤回 | member 以上 | `require_human` | `source_type` から `ai_generated` を CHECK で排除 |
+| Evidence 候補の承認・却下・一括承認 | member 以上 | `require_human` | 判断の記録は複合 FK + `CHECK (decided_by_actor_type = 'human')`。Tool 取得の Evidence は来歴（候補・Tool 呼び出し・実行・取得日時）が必須 |
 | ロールの付与 | — | — | `organization_memberships` に複合 FK + `CHECK (actor_type = 'human')` |
 
 ロールの確認は第1回の人間限定のガードと DB 制約の上に重ねたもので、それらを置き換えたり緩めたりはしません。

@@ -16,6 +16,7 @@ from ai_business_explorer.domain.enums import (
     HumanDecisionValue,
     ReviewDecision,
     StageAssignmentRole,
+    StageRunMode,
 )
 
 ShortText = Field(min_length=1, max_length=200)
@@ -177,6 +178,8 @@ class ExplorationStageRunCommand(_Command):
     ai_employee_id: UUID | None = None
     # 副担当（secondary）。指定した AI 社員も同じ入力で実行する（ステージの状態には影響しない）
     secondary_ai_employee_ids: list[UUID] = Field(default_factory=list, max_length=10)
+    # analyze（分析を作る）/ collect_only（Tool で Evidence 候補を集めるだけ。第2回仕様 2章）
+    mode: StageRunMode = StageRunMode.ANALYZE
 
 
 class IdeaStageRunCommand(ExplorationStageRunCommand):
@@ -195,6 +198,22 @@ class StageAssignmentCreate(_Command):
     stage_key: str = Field(min_length=1, max_length=64)
     ai_employee_id: UUID
     role: StageAssignmentRole
+
+
+class CandidateAccept(_Command):
+    """Evidence 候補の承認。summary は人間の要約（AI生成の補助情報は使わない。B-21）。"""
+
+    summary: str | None = LongText
+    classification: DataClassification = DataClassification.INTERNAL
+
+
+class CandidateBulkAccept(_Command):
+    candidate_ids: list[UUID] = Field(min_length=1, max_length=100)
+    classification: DataClassification = DataClassification.INTERNAL
+
+
+class CandidateReject(_Command):
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class BudgetSet(_Command):

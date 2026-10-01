@@ -4,8 +4,12 @@
 
 - LLM ログの本文（llm_call_payloads）：LLM_PAYLOAD_RETENTION_DAYS（既定 90日）を過ぎたもの。
   メタデータ（llm_calls）は永続で残し、payload_deleted_at に消した日時を記録する。
+- Tool の生の出力（tool_call_outputs）：TOOL_OUTPUT_RETENTION_DAYS（既定 90日）。
+- Tool で取得した全文（候補の snapshot）：TOOL_SNAPSHOT_RETENTION_DAYS（既定 180日）。
+  抜粋（最大 2,000字）・ハッシュ・来歴は残す。
 """
 
+from ai_business_explorer.application.candidates import delete_expired_tool_data
 from ai_business_explorer.application.costs import delete_expired_payloads
 from ai_business_explorer.config import get_settings
 from ai_business_explorer.infrastructure.db.session import build_engine, build_session_factory
@@ -15,8 +19,12 @@ def main() -> None:
     settings = get_settings()
     with build_session_factory(build_engine(settings.database_url))() as session:
         deleted = delete_expired_payloads(session, settings.llm_payload_retention_days)
+        outputs, snapshots = delete_expired_tool_data(
+            session, settings.tool_output_retention_days, settings.tool_snapshot_retention_days
+        )
     days = settings.llm_payload_retention_days
     print(f"deleted {deleted} LLM call payloads older than {days} days")
+    print(f"deleted {outputs} tool outputs and {snapshots} candidate snapshots")
 
 
 if __name__ == "__main__":

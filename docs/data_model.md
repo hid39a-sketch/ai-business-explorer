@@ -39,7 +39,7 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 | `stage_runs` | ステージ実行の試行。ワーカーの記録（`claimed_at`、`worker_id`、`heartbeat_at`）を持つ | ステージと範囲の整合（idea_generation なら idea_id は NULL）、起動者は human、試行番号は一意、**最新（未 supersede）の試行は範囲×ステージごとに1つ**（部分一意インデックス）、`status` |
 | `executions` | AI社員の実行履歴（入力、出力、エラー、使用量、費用の合計 `cost_amount`・`cost_currency`、受付時の上限 `cost_limit`、各種バージョン）。`assignment_role` は primary / secondary | `status`、`error_type`、`assignment_role ∈ primary/secondary`、**primary は stage_run ごとに1つ**（部分一意インデックス）、同じ AI社員は stage_run ごとに1回、`started_at` は queued の間は NULL |
 | `analyses` | AI Analysis（本体は不変） | `review_status`、`version_no ≥ 1`、`execution_id NOT NULL`、`classification`（入力の最も高い分類。算出値）、`ai_employee_id` は実行の AI社員と一致（複合 FK）、**版番号は範囲×ステージ×AI社員ごとに一意** |
-| `evidence` | 根拠・出典（不変。訂正は撤回＋新規登録。本文の消去だけは記録付きで可） | `source_type` に `ai_generated` を含めない、撤回日時と撤回理由は必ずセット、更新版の連鎖（`supersedes_evidence_id`）は一意・自分自身を指さない・同じ組織、消去の記録（日時・理由・消去した人間）は必ずセットで、消去した人は human のみ（複合 FK + CHECK）、`classification`（既定 internal。登録後は変えない） |
+| `evidence` | 根拠・出典（不変。来歴 `acquisition_method ∈ human_input/tool`。Tool 取得なら候補・Tool 呼び出し・実行・取得日時が必須（CHECK）、候補ごとに1つ。訂正は撤回＋新規登録。本文の消去だけは記録付きで可） | `source_type` に `ai_generated` を含めない、撤回日時と撤回理由は必ずセット、更新版の連鎖（`supersedes_evidence_id`）は一意・自分自身を指さない・同じ組織、消去の記録（日時・理由・消去した人間）は必ずセットで、消去した人は human のみ（複合 FK + CHECK）、`classification`（既定 internal。登録後は変えない） |
 | `claims` | AI Analysis の主張（正本。不変） | `kind ∈ evidence_based/inference/speculation`、`(analysis_id, claim_key)` は一意 |
 | `claim_evidence_links` | 主張と Evidence の関係（正本。不変） | 主キーは `(claim_id, evidence_id, relation)`、`relation ∈ supports/contradicts/context`、主張・Evidence と同じ組織（複合 FK） |
 | `pricing` | 単価表（LLM・Tool。組織共通。変更は新しい行で） | `kind ∈ llm/tool`、単価 ≥ 0、`currency` は3文字の大文字、`(kind, provider, model, effective_from)` は一意 |
@@ -47,6 +47,9 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 | `llm_calls` | LLM 呼び出しのメタデータ（永続） | 実行と同じ組織（複合 FK）、`status ∈ succeeded/failed`、`payload_mode ∈ full/none`、`classification`、費用・トークン数 ≥ 0 |
 | `llm_call_payloads` | LLM 呼び出しの本文（admin のみ閲覧。90日で消す） | `llm_call_id` が主キー、呼び出しと同じ組織（複合 FK） |
 | `tool_calls` | Tool 呼び出しのメタデータ（永続） | 実行と同じ組織（複合 FK）、`status`、費用 ≥ 0 |
+| `evidence_candidates` | Tool が取得した Evidence 候補（原情報だけ。AI生成の文章は持たない） | `status ∈ pending/accepted/rejected/duplicate`、承認・却下は人間の判断の記録が必須（複合 FK + CHECK）、却下は理由必須、duplicate は重複先が必須、抜粋は 2,000字以内、実行・Tool 呼び出し・探索案件と同じ組織（複合 FK） |
+| `evidence_candidate_ai_notes` | AI生成の補助情報（Evidence ではない。不変） | 元の候補と生成した実行を必ず参照（複合 FK）。LLM のモデル・Prompt の版を記録 |
+| `tool_call_outputs` | Tool の生の出力（90日で消す） | `tool_call_id` が主キー、呼び出しと同じ組織（複合 FK） |
 | `analysis_evidence_links` | 第1回の根拠リンク（履歴。凍結） | INSERT / UPDATE / DELETE / TRUNCATE を DB トリガーで拒否。アプリも書き込まない |
 | `human_reviews` | 人間のレビュー（追記のみ）。`claim_id` を指定すると主張単位のレビュー | 複合 FK + `reviewer_actor_type = 'human'`、`decision ∈ approve/reject/request_changes/needs_more_evidence`、`claim_id` は対象の分析の主張（複合 FK） |
 | `human_decisions` | 人間の最終判断（追記のみ） | 複合 FK + `decided_by_actor_type = 'human'`、`decision ∈ go/no_go/hold/pivot` |
@@ -115,6 +118,8 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
   - 再実行：`rerun_of_id` に現在の最新試行を指定する。
   - 差し戻し：`send_back` を使う。現在のステージより前のステージを指定し、理由が必須。
   - どちらの場合も、対象ステージ以降の最新試行に `superseded_at` を記録する。
+- **evidence_candidates**：`pending → accepted / rejected`（人間、member 以上）。`duplicate` は重複判定で自動設定（候補の作成時と承認時）。duplicate を pending に戻す操作は第2回では作らない（E-03）。
+- **stage_runs.mode**：`collect_only` の試行は `trigger = initial` だけで、superseded にならず、「最新の試行は1つ」の部分一意インデックスにも数えない。
 - **analyses.review_status**：`pending_review` から、最新のレビュー（`claim_id` のないもの）に応じて `approved` / `rejected` / `changes_requested` / `needs_more_evidence` に変わる。主張単位のレビュー（`claim_id` あり）は `review_status` を変えず、分析の応答の主張ごとに最新のレビューとして表示する。
 
 ## マイグレーション
@@ -128,3 +133,4 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 - `0005`：非同期実行。stage_runs / executions の状態に `queued` と `cancelled` を追加し、ワーカーの列と `executions.assignment_role`（既存はすべて primary）を追加します。`analyses.ai_employee_id` を実行から埋め、版の連鎖を AI社員単位にします（既存の版番号は変えない）。downgrade は開発用で、`queued` / `cancelled` は `failed` に、未開始の実行の開始日時は作成日時になります。
 - `0006`：データ分類。`explorations`・`evidence`・`analyses` に `classification` を追加します。既存の行はすべて `internal`（既存の分析の入力もすべて internal のため、算出値としても正しい）。downgrade は開発用で、分類の記録は失われます。
 - `0007`：費用管理と LLM・Tool のログ。`pricing`・`budgets`・`llm_calls`・`llm_call_payloads`・`tool_calls` を作り、`executions` に費用の合計と上限を追加します（既存の実行は 0 USD・上限なし）。`error_type` に `budget_exceeded` を追加します。downgrade は開発用で、費用とログは失われ、`budget_exceeded` は `unexpected` になります。
+- `0008`：Evidence 候補と収集のみ。`evidence_candidates`・`evidence_candidate_ai_notes`・`tool_call_outputs` を作り、`evidence` に来歴の列（既存はすべて `human_input`）、`stage_runs` に `mode`（既存はすべて `analyze`）を追加します。「最新の試行は1つ」の部分一意インデックスを analyze に限ります。downgrade は開発用で、候補・補助情報・来歴は失われ、collect_only の試行は superseded になります。
