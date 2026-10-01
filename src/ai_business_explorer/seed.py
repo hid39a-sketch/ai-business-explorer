@@ -1,4 +1,7 @@
-"""初期データ投入（冪等）。人間 actor 1人、system actor 1人、Fake AI社員2体。
+"""初期データ投入（冪等）。
+
+既定組織、人間 actor 1人（admin）、system actor 1人（ロールなし）、
+Fake AI社員2体（それぞれのステージの primary）。
 
 実行: uv run python -m ai_business_explorer.seed
 """
@@ -7,16 +10,34 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from ai_business_explorer.agents.registry import build_default_registry
+from ai_business_explorer.agents.registry import AgentRegistry, build_default_registry
 from ai_business_explorer.config import get_settings
-from ai_business_explorer.domain.enums import ActorType, AIEmployeeStatus
+from ai_business_explorer.domain.enums import (
+    ActorType,
+    AIEmployeeStatus,
+    OrganizationRole,
+    StageAssignmentRole,
+)
 from ai_business_explorer.domain.stages import IDEA_GENERATION
-from ai_business_explorer.infrastructure.db.models import Actor, AIEmployee
-from ai_business_explorer.infrastructure.db.repositories import AIEmployeeRepository
+from ai_business_explorer.infrastructure.db.models import (
+    Actor,
+    AIEmployee,
+    Organization,
+    OrganizationMembership,
+    StageAssignment,
+)
+from ai_business_explorer.infrastructure.db.repositories import (
+    AIEmployeeRepository,
+    OrganizationMembershipRepository,
+    StageAssignmentRepository,
+)
 from ai_business_explorer.infrastructure.db.session import build_engine, build_session_factory
 from ai_business_explorer.llm.fake import FAKE_MODEL, FAKE_PROVIDER
 
 # Swagger から操作しやすいよう固定 ID を使う。
+# 既定組織の ID は migration 0002 と同じ値（第2回仕様 E-05）。
+DEFAULT_ORGANIZATION_ID = UUID("00000000-0000-7000-8000-000000000100")
+DEFAULT_ORGANIZATION_NAME = "Default Organization"
 DEFAULT_HUMAN_ACTOR_ID = UUID("00000000-0000-7000-8000-000000000001")
 SYSTEM_ACTOR_ID = UUID("00000000-0000-7000-8000-000000000002")
 
@@ -47,34 +68,69 @@ SEED_EMPLOYEES = [
 
 
 def seed(session: Session) -> None:
+    if session.get(Organization, DEFAULT_ORGANIZATION_ID) is None:
+        session.add(Organization(id=DEFAULT_ORGANIZATION_ID, name=DEFAULT_ORGANIZATION_NAME))
+        session.flush()
     for actor_id, actor_type, name in (
         (DEFAULT_HUMAN_ACTOR_ID, ActorType.HUMAN, "Default Human Reviewer"),
         (SYSTEM_ACTOR_ID, ActorType.SYSTEM, "System"),
     ):
         if session.get(Actor, actor_id) is None:
             session.add(Actor(id=actor_id, actor_type=actor_type.value, display_name=name))
+    session.flush()
+    # ロールは人間だけに付ける。system actor には付けない。
+    if OrganizationMembershipRepository(session).for_actor(DEFAULT_HUMAN_ACTOR_ID) is None:
+        session.add(
+            OrganizationMembership(
+                organization_id=DEFAULT_ORGANIZATION_ID,
+                actor_id=DEFAULT_HUMAN_ACTOR_ID,
+                actor_type=ActorType.HUMAN.value,
+                role=OrganizationRole.ADMIN.value,
+            )
+        )
 
     registry = build_default_registry()
     employees = AIEmployeeRepository(session)
+    assignments = StageAssignmentRepository(session)
     for spec in SEED_EMPLOYEES:
-        if employees.get_by_key(spec["key"]) is not None:
-            continue
-        agent = registry.get(spec["implementation_key"])
-        if agent is None:
-            raise RuntimeError(f"implementation not registered: {spec['implementation_key']}")
-        session.add(
-            AIEmployee(
-                **spec,
-                prompt_version="v1",
-                llm_config={"provider": FAKE_PROVIDER, "model": FAKE_MODEL},
-                allowed_tools=[],
-                input_format=agent.input_model.model_json_schema(),
-                output_format=agent.output_model.model_json_schema(),
-                status=AIEmployeeStatus.ACTIVE.value,
-                version=1,
-            )
+        employee = employees.get_by_key(DEFAULT_ORGANIZATION_ID, spec["key"])
+        if employee is None:
+            employee = _create_employee(session, registry, spec)
+        has_primary = assignments.list_where(
+            StageAssignment.organization_id == DEFAULT_ORGANIZATION_ID,
+            StageAssignment.stage_key == employee.stage_key,
+            StageAssignment.role == StageAssignmentRole.PRIMARY.value,
         )
+        if not has_primary:
+            assignments.add(
+                StageAssignment(
+                    organization_id=DEFAULT_ORGANIZATION_ID,
+                    stage_key=employee.stage_key,
+                    ai_employee_id=employee.id,
+                    role=StageAssignmentRole.PRIMARY.value,
+                )
+            )
     session.commit()
+
+
+def _create_employee(session: Session, registry: AgentRegistry, spec: dict[str, str]) -> AIEmployee:
+    agent = registry.get(spec["implementation_key"])
+    if agent is None:
+        raise RuntimeError(f"implementation not registered: {spec['implementation_key']}")
+    employee = AIEmployee(
+        **spec,
+        organization_id=DEFAULT_ORGANIZATION_ID,
+        prompt_version="v1",
+        llm_config={"provider": FAKE_PROVIDER, "model": FAKE_MODEL},
+        allowed_tools=[],
+        input_format=agent.input_model.model_json_schema(),
+        output_format=agent.output_model.model_json_schema(),
+        status=AIEmployeeStatus.ACTIVE.value,
+        version=1,
+    )
+    session.add(employee)
+    session.flush()
+    return employee
 
 
 def main() -> None:

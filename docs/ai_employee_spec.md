@@ -14,7 +14,9 @@
 | ステータス | `status` | `draft` / `active` / `inactive`（削除はせず無効化する） |
 | バージョン | `version` | 更新のたびに +1。実行時のスナップショットは executions に保存 |
 
-API：`POST/GET /api/v1/ai-employees`、`GET/PATCH /api/v1/ai-employees/{id}`（書き込みは人間のみ）。
+AI社員の定義は組織ごとに持ち、`key` は組織の中で一意です。ステージへの割り当ては `stage_assignments`（primary / secondary）で持ちます。
+
+API：`POST/GET /api/v1/ai-employees`、`GET/PATCH /api/v1/ai-employees/{id}`（書き込みは admin のみ）。
 
 ## 実装（コード）
 

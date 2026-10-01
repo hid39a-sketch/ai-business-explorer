@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ai_business_explorer.domain.enums import ActorType
 from ai_business_explorer.domain.errors import PermissionDeniedError
 from ai_business_explorer.infrastructure.db.models import Actor, AuditEvent
+from ai_business_explorer.infrastructure.db.repositories import scoped_organization_id
 
 _json_adapter: TypeAdapter[Any] = TypeAdapter(Any)
 
@@ -31,9 +32,18 @@ def require_human(actor: Actor, action: str) -> None:
         raise PermissionDeniedError(f"only human actors can {action}")
 
 
+def current_organization_id(session: Session) -> UUID:
+    """操作者の組織。API では依存関係（deps）がリクエストごとにセッションへ設定する。"""
+    org_id = scoped_organization_id(session)
+    if org_id is None:
+        raise RuntimeError("organization scope is not set on the session")
+    return org_id
+
+
 def record_audit(
     session: Session,
     *,
+    organization_id: UUID,
     entity_type: str,
     entity_id: UUID,
     action: str,
@@ -44,6 +54,7 @@ def record_audit(
 ) -> None:
     session.add(
         AuditEvent(
+            organization_id=organization_id,
             entity_type=entity_type,
             entity_id=entity_id,
             action=action,

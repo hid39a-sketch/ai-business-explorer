@@ -29,6 +29,7 @@ class ReviewService:
         analysis = self.analyses.get_or_raise(analysis_id)
         review = self.reviews.add(
             HumanReview(
+                organization_id=analysis.organization_id,
                 analysis_id=analysis.id,
                 exploration_id=analysis.exploration_id,
                 idea_id=analysis.idea_id,
@@ -44,6 +45,7 @@ class ReviewService:
         analysis.review_status = REVIEW_STATUS_BY_DECISION[cmd.decision].value
         record_audit(
             self.session,
+            organization_id=analysis.organization_id,
             entity_type="analysis",
             entity_id=analysis.id,
             action="reviewed",
@@ -84,6 +86,7 @@ class DecisionService:
                 raise DomainValidationError(f"human_review {review_id} is not related to this idea")
         decision = self.decisions.add(
             HumanDecision(
+                organization_id=idea.organization_id,
                 idea_id=idea.id,
                 decided_by_actor_id=actor.id,
                 decided_by_actor_type=actor.actor_type,
@@ -94,6 +97,7 @@ class DecisionService:
         )
         record_audit(
             self.session,
+            organization_id=idea.organization_id,
             entity_type="idea",
             entity_id=idea.id,
             action="human_decision",

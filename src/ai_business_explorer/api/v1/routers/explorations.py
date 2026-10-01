@@ -3,8 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, status
 
 from ai_business_explorer.api.v1.deps import (
-    ActorDep,
     AgentRegistryDep,
+    MemberDep,
     SessionDep,
     SettingsDep,
     ToolRegistryDep,
@@ -35,7 +35,7 @@ router = APIRouter(prefix="/explorations", tags=["explorations"])
 
 
 @router.post("", response_model=ExplorationOut, status_code=status.HTTP_201_CREATED)
-def create_exploration(body: ExplorationCreate, actor: ActorDep, session: SessionDep) -> object:
+def create_exploration(body: ExplorationCreate, actor: MemberDep, session: SessionDep) -> object:
     return ExplorationService(session).create(actor, body)
 
 
@@ -51,14 +51,14 @@ def get_exploration(exploration_id: UUID, session: SessionDep) -> object:
 
 @router.patch("/{exploration_id}", response_model=ExplorationOut)
 def update_exploration(
-    exploration_id: UUID, body: ExplorationUpdate, actor: ActorDep, session: SessionDep
+    exploration_id: UUID, body: ExplorationUpdate, actor: MemberDep, session: SessionDep
 ) -> object:
     return ExplorationService(session).update(actor, exploration_id, body)
 
 
 @router.post("/{exploration_id}/ideas", response_model=IdeaOut, status_code=status.HTTP_201_CREATED)
 def create_idea(
-    exploration_id: UUID, body: IdeaCreate, actor: ActorDep, session: SessionDep
+    exploration_id: UUID, body: IdeaCreate, actor: MemberDep, session: SessionDep
 ) -> object:
     service = IdeaService(session)
     return idea_out(service, service.create(actor, exploration_id, body))
@@ -74,12 +74,12 @@ def list_ideas(exploration_id: UUID, session: SessionDep) -> object:
     "/{exploration_id}/stage-runs",
     response_model=StageRunDetailOut,
     status_code=status.HTTP_201_CREATED,
-    summary="idea_generation ステージを実行する（人間のみ）",
+    summary="idea_generation ステージを実行・再実行する（member 以上の人間のみ）",
 )
 def run_idea_generation(
     exploration_id: UUID,
     body: ExplorationStageRunCommand,
-    actor: ActorDep,
+    actor: MemberDep,
     session: SessionDep,
     settings: SettingsDep,
     agents: AgentRegistryDep,

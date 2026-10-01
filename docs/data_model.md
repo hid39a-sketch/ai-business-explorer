@@ -8,6 +8,9 @@
 ## リレーション
 
 ```
+organizations 1─* (すべての業務テーブル。organization_id)
+organizations 1─* organization_memberships *─1 actors (human のみ)
+organizations 1─* stage_assignments *─1 ai_employees
 explorations 1─* ideas
 explorations 1─* stage_runs (idea_generation: idea_id = NULL)
 ideas        1─* stage_runs (その他のステージ)
@@ -25,8 +28,11 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 
 | テーブル | 役割 | 主な制約 |
 |---|---|---|
-| `actors` | 操作者（`human` / `system`） | `UNIQUE (id, actor_type)`（人間限定の複合 FK の参照先） |
-| `ai_employees` | AI社員の定義（正本） | `key` は一意、`status ∈ draft/active/inactive`、`version ≥ 1` |
+| `organizations` | 組織。第2回は既定組織（`00000000-0000-7000-8000-000000000100`）のみ | |
+| `organization_memberships` | 人間の所属とロール | `role ∈ viewer/member/reviewer/admin`、複合 FK + `actor_type = 'human'`、`actor_id` は一意（1 actor = 1 組織） |
+| `actors` | 操作者（`human` / `system`）。組織には memberships で所属する | `UNIQUE (id, actor_type)`（人間限定の複合 FK の参照先） |
+| `ai_employees` | AI社員の定義（正本）。組織ごとに持つ | `(organization_id, key)` は一意、`status ∈ draft/active/inactive`、`version ≥ 1` |
+| `stage_assignments` | ステージへのAI社員の割り当て | `role ∈ primary/secondary`、primary は組織×ステージごとに最大1人、`stage_key <> 'human_review'`、複合 FK（ai_employee_id, stage_key, organization_id）でAI社員の担当ステージ・組織と一致 |
 | `explorations` | 探索案件 | `status ∈ active/archived` |
 | `ideas` | 事業アイデア（仕様書9章の項目はすべて自由記述テキスト） | `adoption_status ∈ candidate/adopted/rejected`、`origin_type = 'ai'` と `origin_analysis_id IS NOT NULL` が同値 |
 | `stage_runs` | ステージ実行の試行 | ステージと範囲の整合（idea_generation なら idea_id は NULL）、起動者は human、試行番号は一意、**最新（未 supersede）の試行は範囲×ステージごとに1つ**（部分一意インデックス） |
@@ -37,6 +43,8 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 | `human_reviews` | 人間のレビュー（追記のみ） | 複合 FK + `reviewer_actor_type = 'human'`、`decision ∈ approve/reject/request_changes/needs_more_evidence` |
 | `human_decisions` | 人間の最終判断（追記のみ） | 複合 FK + `decided_by_actor_type = 'human'`、`decision ∈ go/no_go/hold/pivot` |
 | `audit_events` | 監査ログ | `(entity_type, entity_id)` にインデックス |
+
+業務テーブル（`ai_employees`、`explorations`、`ideas`、`stage_runs`、`executions`、`analyses`、`evidence`、`human_reviews`、`human_decisions`、`audit_events`、`stage_assignments`）はすべて `organization_id` を持ちます。親から分かる場合も冗長に持ち、親子の組織の一致は複合 FK（子の `(親ID, organization_id)` → 親の `(id, organization_id)`）で保証します。
 
 ### Evidence の項目（仕様書11章との対応）
 
@@ -78,4 +86,7 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 
 ## マイグレーション
 
-`migrations/versions/` を参照してください。`ideas.origin_analysis_id` と `analyses` は循環参照になるため、両テーブルを作った後で FK を追加しています。
+`migrations/versions/` を参照してください。
+
+- `0001`：第1回のスキーマ。`ideas.origin_analysis_id` と `analyses` は循環参照になるため、両テーブルを作った後で FK を追加しています。
+- `0002`：組織とロール。既定組織を作り、第1回のすべての行をその組織に移します。既存の人間 actor は admin になり、system actor にはロールを付けません。組織×ステージごとに最も古い active のAI社員を primary にします。downgrade は開発用で、複数の組織に同じ key のAI社員がある場合は失敗します。

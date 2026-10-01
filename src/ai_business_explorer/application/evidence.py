@@ -40,7 +40,7 @@ class EvidenceService:
                 f"source_type '{cmd.source_type}' is not enabled in this phase "
                 f"(allowed: {sorted(EVIDENCE_SOURCE_TYPES_ENABLED)})"
             )
-        self.explorations.get_or_raise(cmd.exploration_id)
+        exploration = self.explorations.get_or_raise(cmd.exploration_id)
         if cmd.idea_id is not None:
             idea = self.ideas.get_or_raise(cmd.idea_id)
             if idea.exploration_id != cmd.exploration_id:
@@ -48,6 +48,7 @@ class EvidenceService:
         evidence = self.evidence.add(
             Evidence(
                 **cmd.model_dump(exclude={"metadata", "source_type"}),
+                organization_id=exploration.organization_id,
                 source_type=cmd.source_type.value,
                 metadata_=cmd.metadata,
                 content_hash=content_hash(cmd),
@@ -56,6 +57,7 @@ class EvidenceService:
         )
         record_audit(
             self.session,
+            organization_id=evidence.organization_id,
             entity_type="evidence",
             entity_id=evidence.id,
             action="created",
@@ -85,6 +87,7 @@ class EvidenceService:
         evidence.retraction_reason = cmd.reason
         record_audit(
             self.session,
+            organization_id=evidence.organization_id,
             entity_type="evidence",
             entity_id=evidence.id,
             action="retracted",

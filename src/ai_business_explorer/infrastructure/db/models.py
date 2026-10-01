@@ -1,5 +1,10 @@
 """DB モデル。
 
+組織:
+- すべての業務テーブルに organization_id を持たせる（親から分かる場合も冗長に持つ）。
+- 親子の組織の一致は複合 FK（子の (親ID, organization_id) → 親の (id, organization_id)）で保証する。
+- organization_memberships のロールは人間のみ（複合 FK + CHECK actor_type = 'human'）。
+
 分離の原則:
 - evidence        : 外部情報・人間の入力。AI 生成情報（ai_generated）は CHECK 制約で拒否。
 - analyses        : AI の分析。必ず executions に紐づく。本体（body）は不変。
@@ -35,14 +40,16 @@ from ai_business_explorer.domain.enums import (
     EvidenceSourceType,
     ExplorationStatus,
     HumanDecisionValue,
+    OrganizationRole,
     OriginType,
     ReviewDecision,
     ReviewStatus,
     RunStatus,
+    StageAssignmentRole,
     StageRunTrigger,
     sql_in,
 )
-from ai_business_explorer.domain.stages import IDEA_GENERATION
+from ai_business_explorer.domain.stages import HUMAN_REVIEW, IDEA_GENERATION
 from ai_business_explorer.infrastructure.db.base import (
     Base,
     CreatedAtMixin,
@@ -71,16 +78,60 @@ class Actor(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     external_ref: Mapped[str | None] = mapped_column(String(200), unique=True)
 
 
-class AIEmployee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """AI社員の定義（正本）。更新のたびに version が増える。"""
+class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """組織。第2回は既定組織1つで運用する（組織を作る API はない）。"""
+
+    __tablename__ = "organizations"
+
+    name: Mapped[str] = mapped_column(String(200))
+
+
+class OrganizationScopedMixin:
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+
+
+class OrganizationMembership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """人間の組織への所属とロール。AI・system actor には DB レベルでロールを付けられない。
+
+    第2回は 1 actor = 1 組織。
+    """
+
+    __tablename__ = "organization_memberships"
+    __table_args__ = (
+        CheckConstraint(f"role IN ({sql_in(OrganizationRole)})", name="role"),
+        CheckConstraint(f"actor_type = '{HUMAN}'", name="member_is_human"),
+        ForeignKeyConstraint(
+            ["actor_id", "actor_type"],
+            ["actors.id", "actors.actor_type"],
+            name="fk_organization_memberships_actor_human",
+        ),
+        UniqueConstraint("actor_id", name="uq_organization_memberships_actor_id"),
+    )
+
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), index=True)
+    actor_id: Mapped[UUID] = mapped_column()
+    actor_type: Mapped[str] = mapped_column(String(16))
+    role: Mapped[str] = mapped_column(String(16))
+
+
+class AIEmployee(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base):
+    """AI社員の定義（正本）。組織ごとに持ち、更新のたびに version が増える。"""
 
     __tablename__ = "ai_employees"
     __table_args__ = (
         CheckConstraint(f"status IN ({sql_in(AIEmployeeStatus)})", name="status"),
         CheckConstraint("version >= 1", name="version_positive"),
+        UniqueConstraint("organization_id", "key", name="uq_ai_employees_organization_id_key"),
+        # stage_assignments の複合 FK の参照先（担当ステージと組織の一致を保証する）
+        UniqueConstraint(
+            "id",
+            "stage_key",
+            "organization_id",
+            name="uq_ai_employees_id_stage_key_organization_id",
+        ),
     )
 
-    key: Mapped[str] = mapped_column(String(64), unique=True)
+    key: Mapped[str] = mapped_column(String(64))
     name: Mapped[str] = mapped_column(String(200))
     role: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
@@ -97,9 +148,48 @@ class AIEmployee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
 
 
-class Exploration(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class StageAssignment(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base):
+    """ステージへのAI社員の割り当て。primary は組織×ステージごとに最大1人。
+
+    human_review にはAI社員を割り当てられない。
+    AI社員の担当ステージ・組織との一致は複合 FK で保証する。
+    """
+
+    __tablename__ = "stage_assignments"
+    __table_args__ = (
+        CheckConstraint(f"role IN ({sql_in(StageAssignmentRole)})", name="role"),
+        CheckConstraint(f"stage_key <> '{HUMAN_REVIEW}'", name="not_human_review"),
+        ForeignKeyConstraint(
+            ["ai_employee_id", "stage_key", "organization_id"],
+            ["ai_employees.id", "ai_employees.stage_key", "ai_employees.organization_id"],
+            name="fk_stage_assignments_employee_stage_org",
+        ),
+        UniqueConstraint(
+            "organization_id",
+            "stage_key",
+            "ai_employee_id",
+            name="uq_stage_assignments_org_stage_employee",
+        ),
+        Index(
+            "uq_stage_assignments_primary",
+            "organization_id",
+            "stage_key",
+            unique=True,
+            postgresql_where=text(f"role = '{StageAssignmentRole.PRIMARY.value}'"),
+        ),
+    )
+
+    stage_key: Mapped[str] = mapped_column(String(64))
+    ai_employee_id: Mapped[UUID] = mapped_column(index=True)
+    role: Mapped[str] = mapped_column(String(16))
+
+
+class Exploration(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base):
     __tablename__ = "explorations"
-    __table_args__ = (CheckConstraint(f"status IN ({sql_in(ExplorationStatus)})", name="status"),)
+    __table_args__ = (
+        CheckConstraint(f"status IN ({sql_in(ExplorationStatus)})", name="status"),
+        UniqueConstraint("id", "organization_id", name="uq_explorations_id_organization_id"),
+    )
 
     title: Mapped[str] = mapped_column(String(200))
     theme: Mapped[str] = mapped_column(Text)
@@ -108,11 +198,17 @@ class Exploration(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     created_by_actor_id: Mapped[UUID] = mapped_column(ForeignKey("actors.id"))
 
 
-class Idea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+class Idea(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base):
     """事業アイデア。詳細項目は人間のみが更新する（AI の調査結果は analyses に残す）。"""
 
     __tablename__ = "ideas"
     __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_ideas_id_organization_id"),
+        ForeignKeyConstraint(
+            ["exploration_id", "organization_id"],
+            ["explorations.id", "explorations.organization_id"],
+            name="fk_ideas_exploration_org",
+        ),
         CheckConstraint(f"origin_type IN ({sql_in(OriginType)})", name="origin_type"),
         CheckConstraint(f"adoption_status IN ({sql_in(AdoptionStatus)})", name="adoption_status"),
         CheckConstraint(
@@ -147,7 +243,7 @@ class Idea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     created_by_actor_id: Mapped[UUID | None] = mapped_column(ForeignKey("actors.id"))
 
 
-class StageRun(UUIDPrimaryKeyMixin, Base):
+class StageRun(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     """ステージ実行の1試行。
 
     再実行・差し戻しでは新しい行を作り、古い行に superseded_at を記録する。
@@ -155,6 +251,12 @@ class StageRun(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "stage_runs"
     __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_stage_runs_id_organization_id"),
+        ForeignKeyConstraint(
+            ["exploration_id", "organization_id"],
+            ["explorations.id", "explorations.organization_id"],
+            name="fk_stage_runs_exploration_org",
+        ),
         CheckConstraint(f"trigger IN ({sql_in(StageRunTrigger)})", name="trigger"),
         CheckConstraint(f"status IN ({sql_in(RunStatus)})", name="status"),
         CheckConstraint(
@@ -218,11 +320,16 @@ class StageRun(UUIDPrimaryKeyMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class Execution(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class Execution(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
     """AI社員の実行履歴。実行時点の AI社員定義・Prompt・LLM・コードのバージョンを保存する。"""
 
     __tablename__ = "executions"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["stage_run_id", "organization_id"],
+            ["stage_runs.id", "stage_runs.organization_id"],
+            name="fk_executions_stage_run_org",
+        ),
         CheckConstraint(f"status IN ({sql_in(RunStatus)})", name="status"),
         CheckConstraint(
             f"error_type IS NULL OR error_type IN ({sql_in(ErrorType)})", name="error_type"
@@ -252,7 +359,7 @@ class Execution(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class Analysis(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class Analysis(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
     """AI Analysis。Evidence ではない。
 
     本体は不変で、review_status のみ ReviewService が更新する。
@@ -260,6 +367,12 @@ class Analysis(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
     __tablename__ = "analyses"
     __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_analyses_id_organization_id"),
+        ForeignKeyConstraint(
+            ["exploration_id", "organization_id"],
+            ["explorations.id", "explorations.organization_id"],
+            name="fk_analyses_exploration_org",
+        ),
         CheckConstraint(f"review_status IN ({sql_in(ReviewStatus)})", name="review_status"),
         CheckConstraint("version_no >= 1", name="version_positive"),
     )
@@ -279,11 +392,16 @@ class Analysis(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     )
 
 
-class Evidence(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class Evidence(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
     """根拠・出典。外部情報または人間の入力のみ。不変（訂正は撤回＋新規登録）。"""
 
     __tablename__ = "evidence"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["exploration_id", "organization_id"],
+            ["explorations.id", "explorations.organization_id"],
+            name="fk_evidence_exploration_org",
+        ),
         CheckConstraint(f"source_type IN ({sql_in(EvidenceSourceType)})", name="source_type"),
         CheckConstraint(
             "(retracted_at IS NULL) = (retraction_reason IS NULL)", name="retraction_reason"
@@ -321,11 +439,16 @@ class AnalysisEvidenceLink(Base):
     relation: Mapped[str] = mapped_column(String(16))
 
 
-class HumanReview(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class HumanReview(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
     """人間によるレビュー。人間以外の actor では DB レベルで挿入できない。追記のみ。"""
 
     __tablename__ = "human_reviews"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["analysis_id", "organization_id"],
+            ["analyses.id", "analyses.organization_id"],
+            name="fk_human_reviews_analysis_org",
+        ),
         CheckConstraint(f"decision IN ({sql_in(ReviewDecision)})", name="decision"),
         CheckConstraint(f"reviewer_actor_type = '{HUMAN}'", name="reviewer_is_human"),
         ForeignKeyConstraint(
@@ -345,11 +468,16 @@ class HumanReview(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     corrections: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
-class HumanDecision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class HumanDecision(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
     """人間による最終的な事業判断。AI から書き込む経路はない。追記のみ。"""
 
     __tablename__ = "human_decisions"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["idea_id", "organization_id"],
+            ["ideas.id", "ideas.organization_id"],
+            name="fk_human_decisions_idea_org",
+        ),
         CheckConstraint(f"decision IN ({sql_in(HumanDecisionValue)})", name="decision"),
         CheckConstraint(f"decided_by_actor_type = '{HUMAN}'", name="decided_by_human"),
         ForeignKeyConstraint(
@@ -367,7 +495,7 @@ class HumanDecision(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     based_on_review_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
 
 
-class AuditEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class AuditEvent(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base):
     """監査ログ。変更可能なエンティティの更新・状態遷移・レビュー・決定・差し戻しを記録する。"""
 
     __tablename__ = "audit_events"

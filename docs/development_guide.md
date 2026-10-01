@@ -32,8 +32,9 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 | ディレクトリ | 内容 |
 |---|---|
 | `tests/unit/` | ステージ定義、Fake LLM、Tool のポリシー、Prompt、AI社員、AI社員から DB への到達禁止（import 検査） |
-| `tests/integration/` | DB 制約（人間限定、ai_generated の拒否、ステージ範囲、AI 生成 Idea の出自） |
-| `tests/api/` | API の一連の流れ（AI社員の CRUD、Idea、実行の成功と失敗、Evidence、Analysis、Review、Decision、再実行、差し戻し、監査ログ） |
+| `tests/integration/` | DB 制約（人間限定、ai_generated の拒否、ステージ範囲、AI 生成 Idea の出自、ロールは人間のみ、担当の制約、組織の一致） |
+| `tests/api/` | API の一連の流れ（AI社員の CRUD、Idea、実行の成功と失敗、Evidence、Analysis、Review、Decision、再実行、差し戻し、監査ログ）、ロールごとの操作の可否、組織による分離 |
+| `tests/migrations/` | migration による既存データの移行。専用のデータベース（`<TEST_DATABASE_URL のDB名>_migration`）を作って使うため、DB ユーザーに CREATE DATABASE の権限が必要 |
 
 LLM は `FakeLLMClient` で、応答は決定的です。失敗のテストでは、`StageRunService(llm_client_factory=...)` に例外を投げる Fake を渡します。
 
@@ -61,4 +62,4 @@ uv run alembic check                               # モデルとの差分がな
 - `LLM_PROVIDER` は `fake` 以外を設定すると、起動時の設定検証で拒否されます。
 - AI社員は `AgentContext` だけを受け取り、DB やサービスへアクセスできません。ツールは許可リストと副作用ポリシーで制限しています（第1回の許可は `read_only` のみで、本番用ツールの登録はありません）。
 - Prompt の参照はキーとバージョンを正規表現で検証し、パストラバーサルを防いでいます。
-- `X-Actor-Id` は認証ではありません。外部に公開する環境では使わないでください。
+- `X-Actor-Id` は認証ではありません。ロールは誤操作の防止にしかならず、ヘッダを偽れば不正に操作できます。外部に公開する環境では使わないでください。

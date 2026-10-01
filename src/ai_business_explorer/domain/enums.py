@@ -8,6 +8,38 @@ class ActorType(StrEnum):
     SYSTEM = "system"
 
 
+class OrganizationRole(StrEnum):
+    """組織内のロール。上位のロールは下位のロールの操作もできる。
+
+    人間（human actor）にだけ付ける。
+    """
+
+    VIEWER = "viewer"
+    MEMBER = "member"
+    REVIEWER = "reviewer"
+    ADMIN = "admin"
+
+    @property
+    def rank(self) -> int:
+        return _ROLE_RANK[self]
+
+    def includes(self, required: "OrganizationRole") -> bool:
+        return self.rank >= required.rank
+
+
+_ROLE_RANK: dict[OrganizationRole, int] = {
+    OrganizationRole.VIEWER: 0,
+    OrganizationRole.MEMBER: 1,
+    OrganizationRole.REVIEWER: 2,
+    OrganizationRole.ADMIN: 3,
+}
+
+
+class StageAssignmentRole(StrEnum):
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+
+
 class AIEmployeeStatus(StrEnum):
     DRAFT = "draft"
     ACTIVE = "active"

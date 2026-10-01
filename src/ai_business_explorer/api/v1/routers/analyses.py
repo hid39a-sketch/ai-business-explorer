@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from ai_business_explorer.api.v1.deps import ActorDep, SessionDep
+from ai_business_explorer.api.v1.deps import ReviewerDep, SessionDep
 from ai_business_explorer.api.v1.schemas import (
     AnalysisDetailOut,
     AnalysisOut,
@@ -30,10 +30,10 @@ def get_analysis(analysis_id: UUID, session: SessionDep) -> object:
     "/{analysis_id}/human-reviews",
     response_model=HumanReviewOut,
     status_code=status.HTTP_201_CREATED,
-    summary="AI Analysis をレビューする（人間のみ）",
+    summary="AI Analysis をレビューする（reviewer 以上の人間のみ）",
 )
 def create_human_review(
-    analysis_id: UUID, body: HumanReviewCreate, actor: ActorDep, session: SessionDep
+    analysis_id: UUID, body: HumanReviewCreate, actor: ReviewerDep, session: SessionDep
 ) -> object:
     return ReviewService(session).create(actor, analysis_id, body)
 

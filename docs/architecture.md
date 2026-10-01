@@ -29,6 +29,23 @@ PostgreSQL 16
 
 依存の方向は `api → application → (domain, agents, llm, tools, infrastructure)` です。`agents/` から `application/`・`infrastructure/`・`sqlalchemy` を import していないことは、テスト（`tests/unit/test_agents.py`）で検査しています。
 
+## 組織とロール（第2回）
+
+- すべての業務データは組織（`organization_id`）に属します。第2回は既定組織1つで運用し、組織を作る API はありません。
+- API は `X-Actor-Id` から操作者を特定し、所属組織とロールを解決します（`api/v1/deps.py` の `get_principal`）。`/stages` と `/health` 以外のすべての API は、この解決を必ず通ります（テストで検査）。
+- セッションは操作者の組織に限られ、他組織のデータは「存在しない」として 404 を返します（`repositories.scope_to_organization`）。
+- ロールを持てるのは人間だけです。AI・system actor はロールを持てないため、閲覧も含めて API を使えません。
+- 認証はありません。ロールは誤操作の防止のためのもので、不正は防げません。
+
+| 操作 | 必要なロール |
+|---|---|
+| 閲覧 | viewer 以上 |
+| 探索案件・Idea の作成と更新、Evidence の登録と撤回、ステージの実行・再実行 | member 以上 |
+| 差し戻し、Human Review、Human Decision、Idea の採否 | reviewer 以上 |
+| AI社員の登録・更新（設定変更） | admin |
+
+上位のロールは下位のロールの操作もできます（viewer < member < reviewer < admin）。
+
 ## AI社員の実行フロー（同期）
 
 1. 人間が API からステージ実行を起動する（自動で次のステージへは進まない）。
@@ -41,15 +58,18 @@ PostgreSQL 16
 
 ## 人間専用の操作（AI からの経路なし）
 
-| 操作 | アプリ層 | DB 層 |
-|---|---|---|
-| Human Review | `require_human` | 複合 FK（actor_id, actor_type）+ `CHECK (reviewer_actor_type = 'human')` |
-| Human Decision | `require_human` + 対象 Idea が `adopted` であること | 同上 |
-| ステージ実行・再実行・差し戻し | `require_human` | `stage_runs` に同様の複合 FK + CHECK |
-| Idea の採用・却下・更新 | `require_human` | （監査ログに記録） |
-| Evidence の登録・撤回 | `require_human` | `source_type` から `ai_generated` を CHECK で排除 |
+| 操作 | ロール | アプリ層 | DB 層 |
+|---|---|---|---|
+| Human Review | reviewer 以上 | `require_human` | 複合 FK（actor_id, actor_type）+ `CHECK (reviewer_actor_type = 'human')` |
+| Human Decision | reviewer 以上 | `require_human` + 対象 Idea が `adopted` であること | 同上 |
+| ステージ実行・再実行 | member 以上 | `require_human` | `stage_runs` に同様の複合 FK + CHECK |
+| 差し戻し | reviewer 以上 | `require_human` | 同上 |
+| Idea の採用・却下 | reviewer 以上 | `require_human` | （監査ログに記録） |
+| Idea の更新 | member 以上 | `require_human` | （監査ログに記録） |
+| Evidence の登録・撤回 | member 以上 | `require_human` | `source_type` から `ai_generated` を CHECK で排除 |
+| ロールの付与 | — | — | `organization_memberships` に複合 FK + `CHECK (actor_type = 'human')` |
 
-第1回は、書き込み API をすべて human actor に限定しています。
+ロールの確認は第1回の人間限定のガードと DB 制約の上に重ねたもので、それらを置き換えたり緩めたりはしません。
 
 ## バージョン追跡
 
@@ -88,7 +108,7 @@ PostgreSQL 16
 - 残りの AI社員（CompetitorResearcher、TechnologyResearcher、PatentResearcher、MonetizationAnalyst、RiskAnalyst、BusinessAnalyst）
 - AI社員同士の相互検証
 - ステージの自動連鎖、ジョブキュー、非同期実行、タイムアウト制御、DAG・並列ステージ
-- 本格的な認証・権限（`api/v1/deps.py` の `get_actor` を差し替える）、レビュー画面
+- 本格的な認証（`api/v1/deps.py` の `get_principal` で操作者を特定する部分を差し替える）、レビュー画面
 - 評価軸・スコア・ランキング
 - Evidence のベクトル検索（pgvector）
 - 追記専用テーブルを DB トリガーで UPDATE / DELETE 禁止にする
