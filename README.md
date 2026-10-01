@@ -32,7 +32,7 @@ cp .env.example .env
 make setup     # uv sync
 make up        # PostgreSQL 16（docker compose）
 make migrate   # alembic upgrade head
-make seed      # human actor / system actor / Fake AI社員2体
+make seed      # 既定組織 / human actor（admin）/ system actor（ロールなし）/ Fake AI社員2体
 make run       # http://localhost:8000/docs
 make check     # lint + typecheck + test + alembic check
 ```
@@ -41,7 +41,7 @@ Docker を使わない場合は、PostgreSQL 16 を用意して `DATABASE_URL` �
 
 ## API の使い方（Swagger から）
 
-書き込み操作には `X-Actor-Id` ヘッダが必要です。シードされた人間 actor は `00000000-0000-7000-8000-000000000001` です。
+`/api/v1/stages` と `/api/v1/health` 以外のすべての API に `X-Actor-Id` ヘッダが必要です（閲覧を含む）。操作者は組織に所属する人間で、ロール（admin / reviewer / member / viewer）に応じた操作だけができます（[Architecture](docs/architecture.md) の「組織とロール」）。シードされた人間 actor `00000000-0000-7000-8000-000000000001` は既定組織の admin です。
 
 1. `POST /api/v1/explorations` で探索案件を作成する
 2. `POST /api/v1/explorations/{id}/stage-runs` で IdeaGenerator を実行する（Idea 候補が `candidate` で登録される）
@@ -51,7 +51,7 @@ Docker を使わない場合は、PostgreSQL 16 を用意して `DATABASE_URL` �
 6. `POST /api/v1/analyses/{id}/human-reviews` で人間がレビューする
 7. `POST /api/v1/ideas/{id}/human-decisions` で人間が最終判断（go / no_go / hold / pivot）を記録する（`adopted` の Idea のみ）
 
-> ⚠️ `X-Actor-Id` は認証ではありません。ヘッダの値をそのまま信頼する、第1回専用の簡易方式です。外部に公開する環境では使えません。
+> ⚠️ `X-Actor-Id` は認証ではありません。ヘッダの値をそのまま信頼する簡易方式で、第2回も同じです。ヘッダを偽ればどのロールでも操作できるため、ロールは誤操作の防止にしかならず、不正は防げません。外部に公開する環境では使えません。
 
 ## 第1回で実装していないもの
 
