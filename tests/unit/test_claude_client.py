@@ -173,3 +173,83 @@ def test_smoke_does_nothing_without_confirmation(monkeypatch: pytest.MonkeyPatch
         llm_smoke, "ClaudeLLMClient", lambda *_: pytest.fail("must not create a client")
     )
     assert llm_smoke.main() == 0
+
+
+# ---------------------------------------------------------------------- 構造化出力
+
+
+def _schema() -> dict[str, object]:
+    from ai_business_explorer.agents.base import output_schema_for
+    from ai_business_explorer.agents.employees.market_researcher import MarketResearcherOutput
+
+    return output_schema_for(MarketResearcherOutput, [])
+
+
+def test_response_schema_is_sent_as_structured_output() -> None:
+    sdk = FakeClaudeSDK(replies=[FakeReply(text='{"summary": "s", "market_overview": "m"}')])
+    schema = _schema()
+    response = _client(sdk).complete(_request(response_schema=schema))
+    [params] = sdk.requests
+    # SDK の transform_schema で、API が受け付ける形（additionalProperties: false など）にして送る
+    assert params["output_config"] == {
+        "format": {"type": "json_schema", "schema": anthropic.transform_schema(schema)}
+    }
+    assert params["output_config"]["format"]["schema"]["additionalProperties"] is False
+    assert {k: v for k, v in params.items() if k != "output_config"} == {
+        "model": "claude-opus-5-5",
+        "max_tokens": 16000,
+        "system": "指示",
+        "messages": [{"role": "user", "content": '{"data": "外部の文章"}'}],
+    }
+    assert response.structured == {"summary": "s", "market_overview": "m"}
+    assert response.text == '{"summary": "s", "market_overview": "m"}'
+
+
+def test_transform_schema_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[object] = []
+
+    def fake_transform(schema: dict[str, object]) -> dict[str, object]:
+        seen.append(schema)
+        return {"type": "object", "transformed": True}
+
+    monkeypatch.setattr(anthropic, "transform_schema", fake_transform)
+    sdk = FakeClaudeSDK(replies=[FakeReply(text="{}")])
+    schema = _schema()
+    _client(sdk).complete(_request(response_schema=schema))
+    assert seen == [schema]
+    assert sdk.requests[0]["output_config"]["format"]["schema"] == {
+        "type": "object",
+        "transformed": True,
+    }
+
+
+def test_no_structured_output_without_a_schema() -> None:
+    sdk = FakeClaudeSDK(replies=[FakeReply(text='{"ok": true}')])
+    response = _client(sdk).complete(_request())
+    assert "output_config" not in sdk.requests[0]
+    assert response.structured is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '```json\n{"summary": "s", "market_overview": "m"}\n```',  # 囲みは外さない
+        "not json",
+        '["a list"]',
+    ],
+)
+def test_non_json_object_is_not_taken_as_structured(text: str) -> None:
+    """JSON オブジェクトでない応答は structured にしない（AI社員の検証で失敗する）。"""
+    sdk = FakeClaudeSDK(replies=[FakeReply(text=text)])
+    response = _client(sdk).complete(_request(response_schema=_schema()))
+    assert response.structured is None
+    assert response.text == text
+
+
+@pytest.mark.parametrize("stop_reason", ["refusal", "max_tokens"])
+def test_unusable_structured_responses_still_fail_with_usage(stop_reason: str) -> None:
+    sdk = FakeClaudeSDK(replies=[FakeReply(text='{"summary": "s', stop_reason=stop_reason)])
+    with pytest.raises(LLMResponseError) as info:
+        _client(sdk).complete(_request(response_schema=_schema()))
+    assert info.value.response.structured is None
+    assert info.value.response.usage.output_tokens == 50
