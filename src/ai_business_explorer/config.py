@@ -1,12 +1,13 @@
 """アプリケーション設定。値は環境変数（または .env）から読み込む。秘密情報をコードに書かない。"""
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ai_business_explorer.domain.enums import DataClassification
+from ai_business_explorer.domain.enums import BudgetMode, DataClassification, PayloadMode
 from ai_business_explorer.tools.base import ToolSideEffect
 
 
@@ -52,6 +53,22 @@ class Settings(BaseSettings):
             if limit is DataClassification.RESTRICTED:
                 raise ValueError(f"restricted data must not be sent to any LLM ({provider})")
         return value
+
+    # 費用管理（第2回仕様 10章・R-21 の暫定値）。費用はプロバイダーの請求通貨のまま記録する。
+    # 予算の行（budgets）がない組織は、この月額上限と方式を使う。
+    budget_currency: str = "USD"
+    organization_monthly_budget: Decimal = Decimal("100")
+    organization_budget_mode: BudgetMode = BudgetMode.HARD
+    # 1回の実行（execution）ごとの上限。AI社員の llm_config で個別に指定できる
+    execution_max_cost: Decimal = Decimal("1")
+    execution_max_llm_calls: int = 20
+    execution_max_tool_calls: int = 20
+
+    # LLM ログの本文（第2回仕様 12章・R-16）。public・internal は full、confidential 以上は
+    # 保存しない。none にすると、すべての本文を保存しない（既定より厳しくすることだけを許す）。
+    llm_payload_mode: PayloadMode = PayloadMode.FULL
+    # 保存期間（R-20）。期限を過ぎた本文は retention コマンドで消す
+    llm_payload_retention_days: int = 90
 
     def llm_send_limit(self, provider: str) -> DataClassification:
         limit = DataClassification(

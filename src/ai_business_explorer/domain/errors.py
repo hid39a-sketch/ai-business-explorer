@@ -23,3 +23,10 @@ class InvalidStateError(DomainError):
 
 class DomainValidationError(DomainError):
     """入力値がドメインルールに反する。"""
+
+
+class BudgetExceededError(InvalidStateError):
+    """予算または実行ごとの上限を超える（第2回仕様 10章。起動時は 409、実行中は failed）。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"budget_exceeded: {message}")

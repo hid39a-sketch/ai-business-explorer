@@ -61,6 +61,7 @@ def _analysis(session: Session, human: Actor, exploration: Exploration) -> Analy
         code_version="test",
         status="succeeded",
         started_at=now,
+        cost_currency="USD",
     )
     session.add(execution)
     session.flush()

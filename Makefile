@@ -1,4 +1,4 @@
-.PHONY: setup up down migrate seed run worker test lint format typecheck check
+.PHONY: setup up down migrate seed run worker retention test lint format typecheck check
 
 setup:  ## 依存関係をインストール
 	uv sync
@@ -20,6 +20,9 @@ run:  ## API サーバー（Swagger: http://localhost:8000/docs）
 
 worker:  ## ステージ実行のワーカー（queued の実行を処理する）
 	uv run python -m ai_business_explorer.worker
+
+retention:  ## 保存期間を過ぎた LLM ログの本文を消す（cron から起動してもよい）
+	uv run python -m ai_business_explorer.retention
 
 test:
 	uv run pytest

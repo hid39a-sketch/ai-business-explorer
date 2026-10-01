@@ -15,8 +15,9 @@
 """
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -51,6 +52,12 @@ from ai_business_explorer.application.common import (
     to_jsonable,
     utcnow,
 )
+from ai_business_explorer.application.costs import (
+    BudgetService,
+    ExecutionLimits,
+    ExecutionMeter,
+    find_pricing,
+)
 from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.config import Settings
 from ai_business_explorer.domain.enums import (
@@ -61,13 +68,18 @@ from ai_business_explorer.domain.enums import (
     ErrorType,
     ExplorationStatus,
     OriginType,
+    PricingKind,
     ReviewStatus,
     RunStatus,
     StageAssignmentRole,
     StageRunTrigger,
     highest_classification,
 )
-from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
+from ai_business_explorer.domain.errors import (
+    BudgetExceededError,
+    DomainValidationError,
+    InvalidStateError,
+)
 from ai_business_explorer.domain.evidence import EvidenceStatus
 from ai_business_explorer.domain.execution import ExecutionCancelledError
 from ai_business_explorer.domain.stages import (
@@ -133,9 +145,13 @@ class _Plan:
     rerun_of_id: UUID | None = None
     sent_back_from_id: UUID | None = None
     reason: str | None = None
+    # AI社員ごとの1実行あたりの費用上限と通貨（起動時の予算の確認で決める）
+    cost_limits: dict[UUID, tuple[Decimal, str]] = field(default_factory=dict)
 
 
 def classify_error(exc: BaseException) -> ErrorType:
+    if isinstance(exc, BudgetExceededError):
+        return ErrorType.BUDGET_EXCEEDED
     if isinstance(exc, LLMError):
         return ErrorType.LLM_ERROR
     if isinstance(exc, ToolError):
@@ -505,8 +521,33 @@ class StageRunService:
             + [a.classification for a in prior]
         )
 
+    def _check_budget(self, plan: _Plan) -> None:
+        """起動時の予算の確認（第2回仕様 10章）。足りなければ 409（budget_exceeded）。
+
+        各 AI社員の LLM に単価があること、単価の通貨が予算の通貨と同じことも確認する
+        （単価が分からない・通貨が違うと、費用を予算に計上できず上限を守れないため）。
+        """
+        now = utcnow()
+        currencies: set[str] = set()
+        for member in plan.members:
+            employee = member.employee
+            provider, model = resolve_llm_config(employee.llm_config, self.settings.llm_provider)
+            pricing = find_pricing(self.session, PricingKind.LLM, provider, model, now)
+            if pricing is None:
+                raise InvalidStateError(f"no pricing for LLM {provider}/{model}")
+            limits = ExecutionLimits.from_llm_config(employee.llm_config, self.settings)
+            plan.cost_limits[employee.id] = (limits.max_cost, pricing.currency)
+            currencies.add(pricing.currency)
+        if len(currencies) != 1:
+            raise InvalidStateError(f"AI employees use different currencies: {sorted(currencies)}")
+        needed = sum((limit for limit, _ in plan.cost_limits.values()), Decimal(0))
+        BudgetService(self.session, self.settings).check_launch(
+            plan.exploration.organization_id, plan.exploration.id, needed, currencies.pop()
+        )
+
     def _start(self, actor: Actor, plan: _Plan) -> StageRun:
         self._check_classification(plan)
+        self._check_budget(plan)
         stage_run = self._queue(actor, plan)
         if self.settings.execution_mode == "sync":
             self.execute(stage_run.id, worker_id="sync")
@@ -562,6 +603,9 @@ class StageRunService:
                     code_version=self.settings.code_version or detect_code_version(),
                     status=RunStatus.QUEUED.value,
                     input={},
+                    cost_amount=Decimal(0),
+                    cost_limit=plan.cost_limits[employee.id][0],
+                    cost_currency=plan.cost_limits[employee.id][1],
                 )
             )
         action = "send_back" if plan.trigger is StageRunTrigger.SEND_BACK else "started"
@@ -676,8 +720,14 @@ class StageRunService:
                 )
             agent = self._agent_for(employee)
             _, model = resolve_llm_config(employee.llm_config, self.settings.llm_provider)
+            # 費用と呼び出しの記録・上限（第2回仕様 10・12章）。取り消しの確認の後に計測する
+            meter = ExecutionMeter(
+                self.session, self.settings, execution, stage_run.exploration_id, classification
+            )
             llm = TrackingLLMClient(
-                self.llm_client_factory(execution.llm_provider or self.settings.llm_provider),
+                meter.wrap(
+                    self.llm_client_factory(execution.llm_provider or self.settings.llm_provider)
+                ),
                 guard=guard,
                 call_timeout_seconds=self.settings.llm_call_timeout_seconds,
             )
@@ -692,6 +742,7 @@ class StageRunService:
                     idea_id=idea.id if idea else None,
                 ),
                 guard=guard,
+                recorder=meter,
             )
             ctx = AgentContext(
                 exploration=ExplorationView.model_validate(exploration, from_attributes=True),

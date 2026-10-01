@@ -52,7 +52,7 @@ class AIEmployeeService:
         employee = AIEmployee(
             **cmd.model_dump(exclude={"llm_config", "status"}),
             organization_id=organization_id,
-            llm_config=cmd.llm_config.model_dump(),
+            llm_config=cmd.llm_config.model_dump(mode="json"),
             status=cmd.status.value,
             version=1,
         )
@@ -87,7 +87,7 @@ class AIEmployeeService:
         require_human(actor, "update AI employees")
         employee = self.employees.get_or_raise(employee_id)
         before = snapshot(employee, AUDIT_FIELDS)
-        changes = cmd.model_dump(exclude_unset=True)
+        changes = cmd.model_dump(exclude_unset=True, mode="json")
         if not changes:
             return employee
         for field, value in changes.items():

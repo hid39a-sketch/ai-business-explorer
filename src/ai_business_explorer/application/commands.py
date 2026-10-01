@@ -1,6 +1,7 @@
 """サービスへの入力（コマンド）。API のリクエストボディとしても使う。"""
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, ClassVar
 from uuid import UUID
 
@@ -8,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ai_business_explorer.domain.enums import (
     AIEmployeeStatus,
+    BudgetMode,
     DataClassification,
     EvidenceSourceType,
     ExplorationStatus,
@@ -40,6 +42,13 @@ class _PartialUpdate(_Command):
 class LLMConfig(_Command):
     provider: str = Field(default="fake", min_length=1, max_length=64)
     model: str | None = Field(default=None, max_length=128)
+    # 1回の実行ごとの上限（第2回仕様 10章）。未指定なら設定の既定値（R-21：1 USD、各20回）
+    max_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
+    max_llm_calls: int | None = Field(default=None, ge=1, le=1000)
+    max_tool_calls: int | None = Field(default=None, ge=0, le=1000)
+    max_cost_per_execution: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=8
+    )
 
 
 class AIEmployeeCreate(_Command):
@@ -186,6 +195,15 @@ class StageAssignmentCreate(_Command):
     stage_key: str = Field(min_length=1, max_length=64)
     ai_employee_id: UUID
     role: StageAssignmentRole
+
+
+class BudgetSet(_Command):
+    """月単位の予算。exploration_id を省略すると組織全体の予算（第2回仕様 10章）。"""
+
+    exploration_id: UUID | None = None
+    monthly_limit: Decimal = Field(ge=0, max_digits=18, decimal_places=8)
+    currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    mode: BudgetMode = BudgetMode.HARD
 
 
 class HumanReviewCreate(_Command):

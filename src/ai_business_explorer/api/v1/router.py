@@ -6,6 +6,7 @@ from ai_business_explorer.api.v1.routers import (
     actors,
     ai_employees,
     analyses,
+    costs,
     evidence,
     explorations,
     ideas,
@@ -32,5 +33,6 @@ for module in (
     stage_runs,
     evidence,
     analyses,
+    costs,
 ):
     api_router.include_router(module.router)

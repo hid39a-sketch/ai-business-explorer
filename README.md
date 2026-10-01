@@ -54,6 +54,8 @@ Docker を使わない場合は、PostgreSQL 16 を用意して `DATABASE_URL` �
 
 探索案件と Evidence には `classification`（`public` / `internal` / `confidential` / `restricted`、既定 `internal`）を付けられます。LLM に送れる分類の上限は既定で `internal` で、入力にそれより高い分類が含まれるステージ実行は 409 で拒否されます（[Architecture](docs/architecture.md) の「データ分類」）。分類を下げられるのは admin だけです。
 
+LLM・Tool の呼び出しは費用とともに記録され、組織の月額予算（既定 100 USD）と1実行あたりの上限（既定 1 USD、LLM・Tool 各20回）を超える実行は止まります。`GET /api/v1/costs` で当月の費用と予算の残りを確認でき、予算は admin が `PUT /api/v1/budgets` で設定します。LLM ログの本文は admin だけが閲覧でき、90日で消します（`make retention`）。
+
 一覧 API は `{"items": [...], "next_cursor": ..., "has_more": ...}` を返します（`limit` は既定 50・最大 200、続きは `cursor` に前の応答の `next_cursor` を渡す）。Evidence の一覧は既定で active（有効）なものだけを返し、`status`（`active` / `superseded` / `retracted` / `purged`、繰り返し指定可）で状態を指定できます。日時はすべて UTC（末尾 `Z`）です。
 
 > ⚠️ `X-Actor-Id` は認証ではありません。ヘッダの値をそのまま信頼する簡易方式で、第2回も同じです。ヘッダを偽ればどのロールでも操作できるため、ロールは誤操作の防止にしかならず、不正は防げません。外部に公開する環境では使えません。

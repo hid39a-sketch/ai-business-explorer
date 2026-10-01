@@ -4,6 +4,7 @@
 """
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -186,6 +187,11 @@ class ExecutionOut(_Out):
     usage: dict[str, Any] | None
     # primary（ステージの状態を決める）/ secondary（追加の視点）
     assignment_role: str
+    # 費用の合計（LLM・Tool。取り消し・失敗でも残る）と、受付時の1実行あたりの上限。
+    # 金額は10進の文字列
+    cost_amount: Decimal
+    cost_currency: str
+    cost_limit: Decimal | None
     started_at: UTCDateTime | None
     finished_at: UTCDateTime | None
     created_at: UTCDateTime
@@ -306,3 +312,102 @@ class StageOut(BaseModel):
     label: str
     scope: str
     executable_by_ai: bool
+
+
+class LLMCallOut(_Out):
+    """LLM 呼び出しのメタデータ（本文は含まない）。"""
+
+    id: UUID
+    organization_id: UUID
+    execution_id: UUID
+    provider: str
+    model: str
+    prompt_key: str
+    prompt_version: str
+    prompt_hash: str | None
+    input_tokens: int
+    output_tokens: int
+    cost_amount: Decimal
+    currency: str
+    pricing_id: UUID | None
+    latency_ms: int
+    status: str
+    error_type: str | None
+    error_message: str | None
+    provider_request_id: str | None
+    classification: str
+    payload_mode: str
+    payload_deleted_at: UTCDateTime | None
+    created_at: UTCDateTime
+
+
+class LLMCallPayloadOut(BaseModel):
+    """LLM 呼び出しの本文（admin のみ）。"""
+
+    llm_call_id: UUID
+    request: dict[str, Any]
+    response: dict[str, Any] | None
+    created_at: UTCDateTime
+
+
+class ToolCallOut(_Out):
+    id: UUID
+    organization_id: UUID
+    execution_id: UUID
+    tool_name: str
+    tool_version: str
+    side_effect: str
+    input: dict[str, Any]
+    urls: list[str]
+    cost_amount: Decimal
+    currency: str
+    pricing_id: UUID | None
+    latency_ms: int
+    status: str
+    error_type: str | None
+    error_message: str | None
+    created_at: UTCDateTime
+
+
+class BudgetOut(_Out):
+    id: UUID
+    organization_id: UUID
+    exploration_id: UUID | None
+    monthly_limit: Decimal
+    currency: str
+    mode: str
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
+
+
+class BudgetStatusOut(BaseModel):
+    """当月の予算の状況。budget_id が null の組織の予算は設定の既定値。"""
+
+    budget_id: UUID | None
+    exploration_id: UUID | None
+    monthly_limit: Decimal
+    currency: str
+    mode: str
+    spent: Decimal
+    # 待機中・実行中の実行が、これから使いうる額
+    reserved: Decimal
+    remaining: Decimal
+
+
+class CostLineOut(BaseModel):
+    exploration_id: UUID | None = None
+    currency: str
+    amount: Decimal
+    llm_amount: Decimal
+    tool_amount: Decimal
+    llm_calls: int
+    tool_calls: int
+
+
+class CostSummaryOut(BaseModel):
+    """月ごとの費用（UTC の暦月）。通貨はプロバイダーの請求通貨のまま。"""
+
+    month: str
+    totals: list[CostLineOut]
+    by_exploration: list[CostLineOut]
+    budgets: list[BudgetStatusOut]

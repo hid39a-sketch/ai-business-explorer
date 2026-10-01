@@ -6,9 +6,10 @@
   （AI 生成テキストを Evidence にしないため、候補はツールが取得した外部データに限る）。
 """
 
+import time
 from abc import ABC, abstractmethod
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -83,6 +84,23 @@ class ToolCallRecord(BaseModel):
     side_effect: ToolSideEffect
 
 
+class ToolCallRecorder(Protocol):
+    """Tool 呼び出しの記録と上限の確認（第2回仕様 10章・12章）。実装はアプリケーション層。"""
+
+    def before_tool_call(self, tool: "Tool") -> None:
+        """呼び出しの前。上限を超えていれば例外で止める。"""
+
+    def after_tool_call(
+        self,
+        tool: "Tool",
+        tool_input: dict[str, Any],
+        result: "ToolResult | None",
+        error: BaseException | None,
+        latency_ms: int,
+    ) -> None:
+        """呼び出しの後（成功・失敗とも）。費用とメタデータを記録する。"""
+
+
 class ToolBox:
     """1回の実行で AI社員に渡すツール窓口。許可リストと副作用ポリシーを強制する。"""
 
@@ -93,8 +111,10 @@ class ToolBox:
         allowed_side_effects: list[ToolSideEffect],
         context: ToolContext,
         guard: CallGuard | None = None,
+        recorder: ToolCallRecorder | None = None,
     ) -> None:
         self._guard = guard
+        self._recorder = recorder
         self._registry = registry
         self._allowed = frozenset(allowed_tools)
         self._allowed_side_effects = frozenset(allowed_side_effects)
@@ -114,13 +134,25 @@ class ToolBox:
                 f"tool '{name}' side_effect '{tool.side_effect}' is not allowed"
             )
         parsed = tool.input_model.model_validate(tool_input)
+        if self._recorder is not None:
+            self._recorder.before_tool_call(tool)
         self.calls.append(
             ToolCallRecord(
                 tool_name=tool.name, tool_version=tool.version, side_effect=tool.side_effect
             )
         )
-        result = tool.execute(parsed, self._context)
-        tool.output_model.model_validate(result.output)
+        started = time.monotonic()
+        try:
+            result = tool.execute(parsed, self._context)
+            tool.output_model.model_validate(result.output)
+        except Exception as exc:
+            if self._recorder is not None:
+                elapsed = int((time.monotonic() - started) * 1000)
+                self._recorder.after_tool_call(tool, tool_input, None, exc, elapsed)
+            raise
+        if self._recorder is not None:
+            elapsed = int((time.monotonic() - started) * 1000)
+            self._recorder.after_tool_call(tool, tool_input, result, None, elapsed)
         return result
 
 

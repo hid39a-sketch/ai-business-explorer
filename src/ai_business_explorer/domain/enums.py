@@ -130,6 +130,34 @@ class ErrorType(StrEnum):
     TIMEOUT = "timeout"
     STORAGE_ERROR = "storage_error"
     UNEXPECTED = "unexpected"
+    # 予算・実行ごとの上限を超えた（第2回仕様 10章）
+    BUDGET_EXCEEDED = "budget_exceeded"
+
+
+class BudgetMode(StrEnum):
+    """hard：超えたら止める（既定。R-21）／ soft：警告のみ。"""
+
+    HARD = "hard"
+    SOFT = "soft"
+
+
+class PricingKind(StrEnum):
+    LLM = "llm"
+    TOOL = "tool"
+
+
+class CallStatus(StrEnum):
+    """LLM・Tool の1回の呼び出しの結果。"""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class PayloadMode(StrEnum):
+    """LLM ログの本文の保存方式（第2回仕様 12章・R-16）。redacted は方式が決まるまで使わない。"""
+
+    FULL = "full"
+    NONE = "none"
 
 
 class ClaimKind(StrEnum):

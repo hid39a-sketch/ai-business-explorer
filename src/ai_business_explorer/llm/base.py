@@ -57,6 +57,8 @@ class LLMResponse(BaseModel):
     usage: LLMUsage = Field(default_factory=LLMUsage)
     finish_reason: str = "stop"
     latency_ms: int = 0
+    # プロバイダーが返すリクエストID（問い合わせ用。llm_calls に記録する）
+    request_id: str | None = None
 
 
 class LLMClient(Protocol):
