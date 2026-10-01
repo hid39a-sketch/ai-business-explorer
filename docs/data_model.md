@@ -39,7 +39,7 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 | `stage_runs` | ステージ実行の試行 | ステージと範囲の整合（idea_generation なら idea_id は NULL）、起動者は human、試行番号は一意、**最新（未 supersede）の試行は範囲×ステージごとに1つ**（部分一意インデックス） |
 | `executions` | AI社員の実行履歴（入力、出力、エラー、使用量、各種バージョン） | `status`、`error_type` |
 | `analyses` | AI Analysis（本体は不変） | `review_status`、`version_no ≥ 1`、`execution_id NOT NULL` |
-| `evidence` | 根拠・出典（不変。訂正は撤回＋新規登録） | `source_type` に `ai_generated` を含めない、撤回日時と撤回理由は必ずセット |
+| `evidence` | 根拠・出典（不変。訂正は撤回＋新規登録。本文の消去だけは記録付きで可） | `source_type` に `ai_generated` を含めない、撤回日時と撤回理由は必ずセット、更新版の連鎖（`supersedes_evidence_id`）は一意・自分自身を指さない・同じ組織、消去の記録（日時・理由・消去した人間）は必ずセットで、消去した人は human のみ（複合 FK + CHECK） |
 | `claims` | AI Analysis の主張（正本。不変） | `kind ∈ evidence_based/inference/speculation`、`(analysis_id, claim_key)` は一意 |
 | `claim_evidence_links` | 主張と Evidence の関係（正本。不変） | 主キーは `(claim_id, evidence_id, relation)`、`relation ∈ supports/contradicts/context`、主張・Evidence と同じ組織（複合 FK） |
 | `analysis_evidence_links` | 第1回の根拠リンク（履歴。凍結） | INSERT / UPDATE / DELETE / TRUNCATE を DB トリガーで拒否。アプリも書き込まない |
@@ -48,6 +48,21 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 | `audit_events` | 監査ログ | `(entity_type, entity_id)` にインデックス |
 
 業務テーブル（`ai_employees`、`explorations`、`ideas`、`stage_runs`、`executions`、`analyses`、`claims`、`claim_evidence_links`、`evidence`、`human_reviews`、`human_decisions`、`audit_events`、`stage_assignments`）はすべて `organization_id` を持ちます。親から分かる場合も冗長に持ち、親子の組織の一致は複合 FK（子の `(親ID, organization_id)` → 親の `(id, organization_id)`）で保証します。
+
+### Evidence の状態（第2回 E-01）
+
+状態は保存せず、取得時に算出します。superseded・retracted・purged は別の概念です。
+
+| 状態 | 条件 | 新規Analysisの入力 |
+|---|---|---|
+| active | 下のどれにも当たらない | 入力する |
+| superseded | 更新版（`supersedes_evidence_id` でこの行を指す Evidence）がある | 入力しない |
+| retracted | 人間が理由を付けて撤回した | 入力しない |
+| purged | 本文（`quote`・`summary`）を消去した（admin のみ。理由必須） | 入力しない |
+
+複数に当てはまる場合の表示は purged > retracted > superseded > active の順で、元の各状態も `is_retracted` / `is_superseded` / `is_purged` で返します。どの状態でも行・ID・出典・ハッシュ・来歴・過去の分析の根拠リンクは残り、過去の分析は書き換えません。根拠リンクの応答には、参照先の現在の状態（`evidence_status` など）を付けます。
+
+`source_key` は出典の同一性です（Web は URL のスキームとホストを小文字にし、`#` 以降と追跡用パラメータを除いたもの）。人間が登録した Evidence が、同じ探索案件の active な Evidence と出典（`source_key`）か内容（`content_hash`）で重なる場合は、拒否せず応答の `warnings` で知らせます。第1回の既存の Evidence の `source_key` は空です。
 
 ### Evidence の項目（仕様書11章との対応）
 
@@ -102,3 +117,4 @@ stage_runs.rerun_of_id / sent_back_from_id → stage_runs
 - `0001`：第1回のスキーマ。`ideas.origin_analysis_id` と `analyses` は循環参照になるため、両テーブルを作った後で FK を追加しています。
 - `0002`：組織とロール。既定組織を作り、第1回のすべての行をその組織に移します。既存の人間 actor は admin になり、system actor にはロールを付けません。組織×ステージごとに最も古い active のAI社員を primary にします。downgrade は開発用で、複数の組織に同じ key のAI社員がある場合は失敗します。
 - `0003`：主張と根拠リンク。第1回の `analyses.body.claims` から `claims` を、`analysis_evidence_links` から `claim_evidence_links` を作ります（`body` は変えない）。旧リンクを1件でも取りこぼす場合は移行を中止します。移行の後、`analysis_evidence_links` を DB トリガーで凍結します。downgrade は開発用で、0003 以降に作った分析の主張と根拠リンクは失われます。
+- `0004`：Evidence の版と消去の列（`source_key`、`snapshot_hash`、`supersedes_evidence_id`、消去の記録）と、一覧のカーソル方式のための複合インデックス（組織・親のID・作成日時（stage_runs は開始日時）・ID）。

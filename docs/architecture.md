@@ -48,7 +48,7 @@ PostgreSQL 16
 
 ## AI社員の実行フロー（同期）
 
-1. 人間が API からステージ実行を起動する（自動で次のステージへは進まない）。
+1. 人間が API からステージ実行を起動する（自動で次のステージへは進まない）。AI に渡す Evidence は active のものだけ（superseded・retracted・purged は渡さない）。渡した Evidence の ID と状態は `stage_runs.input_snapshot` に残す。
 2. 事前検証：Idea が `adopted` か、前のステージに成功した最新の試行があるか、担当 AI社員が `active` で実装があるか。
 3. `stage_runs` と `executions` を `running` で作成してコミットする。再実行・差し戻しの場合は、対象ステージ以降の最新試行に `superseded_at` を記録する。
 4. `AgentContext`（読み取り専用の入力、LLM、ToolBox、Prompt）を組み立てて AI社員を実行する。
