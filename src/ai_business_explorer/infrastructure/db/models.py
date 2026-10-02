@@ -884,6 +884,9 @@ class LLMCall(UUIDPrimaryKeyMixin, OrganizationScopedMixin, CreatedAtMixin, Base
     error_type: Mapped[str | None] = mapped_column(String(32))
     error_message: Mapped[str | None] = mapped_column(Text)
     provider_request_id: Mapped[str | None] = mapped_column(String(256))
+    # 実際に送った設定（temperature・thinking・effort・max_tokens）。送っていない項目は
+    # {"sent": false}（第2回仕様 11章 SC候補-9）。秘密情報は入れない。0009 より前の行は null
+    request_params: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # 送ったデータの最も高い分類と、本文の保存方式（confidential 以上は保存しない。R-16）
     classification: Mapped[str] = mapped_column(String(16))
     payload_mode: Mapped[str] = mapped_column(String(16))

@@ -75,6 +75,7 @@ from ai_business_explorer.llm.base import (
     LLMRequest,
     LLMResponse,
     LLMResponseError,
+    ReportsSentParams,
 )
 from ai_business_explorer.tools.base import Tool, ToolError, ToolResult
 
@@ -534,6 +535,7 @@ class ExecutionMeter:
         response: LLMResponse | None,
         error: BaseException | None,
         latency_ms: int,
+        request_params: dict[str, Any] | None = None,
     ) -> None:
         model = (response.model if response else None) or request.model
         pricing = find_pricing(self.session, PricingKind.LLM, provider, model, utcnow())
@@ -566,6 +568,7 @@ class ExecutionMeter:
             error_type=_call_error_type(error),
             error_message=str(error)[:MAX_ERROR_MESSAGE] if error else None,
             provider_request_id=response.request_id if response else None,
+            request_params=request_params,
             classification=self.classification.value,
             payload_mode=self.payload_mode.value,
         )
@@ -683,6 +686,10 @@ class _MeteredLLMClient:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         request = self._meter.before_llm_call(request, self.provider)
+        # 実際に送る設定（上限で絞った後の max_tokens を含む）。失敗した呼び出しでも記録する（11章）
+        params = (
+            self._inner.sent_params(request) if isinstance(self._inner, ReportsSentParams) else None
+        )
         started = time.monotonic()
         try:
             response = self._inner.complete(request)
@@ -690,10 +697,10 @@ class _MeteredLLMClient:
             elapsed = int((time.monotonic() - started) * 1000)
             # 応答が返っていれば（断られた・途中で切れた）その使用量で費用を記録する（E-07）
             returned = exc.response if isinstance(exc, LLMResponseError) else None
-            self._meter.record_llm_call(self.provider, request, returned, exc, elapsed)
+            self._meter.record_llm_call(self.provider, request, returned, exc, elapsed, params)
             raise
         elapsed = int((time.monotonic() - started) * 1000)
-        self._meter.record_llm_call(self.provider, request, response, None, elapsed)
+        self._meter.record_llm_call(self.provider, request, response, None, elapsed, params)
         self._meter._check_cost_after_call()
         return response
 

@@ -348,3 +348,51 @@ def test_http_body_carries_temperature_only_for_haiku_4_5(model: str, sent: bool
         assert body["temperature"] == 0
     assert "top_p" not in body
     assert "top_k" not in body
+
+
+@pytest.mark.parametrize(
+    ("model", "temperature"),
+    [
+        ("claude-haiku-4-5", {"sent": True, "value": 0}),
+        ("claude-haiku-4-5-20251001", {"sent": True, "value": 0}),
+        ("claude-opus-5-5", {"sent": False}),
+        ("claude-sonnet-5-5", {"sent": False}),
+    ],
+)
+def test_sent_params_match_what_is_sent(model: str, temperature: dict[str, object]) -> None:
+    """記録する設定は、実際に messages.create に渡す引数から作る（11章 SC候補-9）。"""
+    sdk = FakeClaudeSDK(replies=[FakeReply()])
+    client = _client(sdk)
+    request = _request(model=model, max_tokens=50_000)
+    params = client.sent_params(request)
+    client.complete(request)
+    [sent] = sdk.requests
+    assert params == {
+        "temperature": temperature,
+        "thinking": {"sent": False},
+        "effort": {"sent": False},
+        # 非ストリーミングの上限で絞った後の値
+        "max_tokens": {"sent": True, "value": sent["max_tokens"]},
+    }
+    assert sent["max_tokens"] == 16000
+    assert FAKE_KEY not in json.dumps(params)
+
+
+def test_describe_sent_params_reports_thinking_and_effort_when_sent() -> None:
+    from ai_business_explorer.llm.claude import describe_sent_params
+
+    params = describe_sent_params(
+        {
+            "model": "m",
+            "max_tokens": 10,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "low"},
+            "extra_body": {"temperature": 0},
+        }
+    )
+    assert params == {
+        "temperature": {"sent": True, "value": 0},
+        "thinking": {"sent": True, "value": {"type": "adaptive"}},
+        "effort": {"sent": True, "value": "low"},
+        "max_tokens": {"sent": True, "value": 10},
+    }

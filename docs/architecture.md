@@ -129,7 +129,7 @@ URL を指定して公開 Web ページを取得する `web_fetch`（external_re
 
 ### LLM・Tool のログ（第2回仕様 12章・14章）
 
-- メタデータ（`llm_calls`・`tool_calls`）は永続。プロバイダー、モデル、Prompt の key / version / hash、トークン数、費用、応答時間、状態、エラー、プロバイダーのリクエストID、送ったデータの分類を持つ。
+- メタデータ（`llm_calls`・`tool_calls`）は永続。プロバイダー、モデル、Prompt の key / version / hash、トークン数、費用、応答時間、状態、エラー、プロバイダーのリクエストID、送ったデータの分類を持つ。`llm_calls.request_params` には、実際に送った temperature・thinking・effort・max_tokens を記録する（送っていない項目は `{"sent": false}`。失敗した呼び出しも含む。秘密情報は入れない。第2回仕様 11章 SC候補-9）。
 - 本文（`llm_call_payloads`）は送ったメッセージと応答だけ。送ったデータの分類が public・internal なら保存し、confidential 以上は保存しない（R-16）。設定 `LLM_PAYLOAD_MODE=none` で全体を保存しないこともできる（既定より厳しくすることだけを許す）。閲覧は admin のみ。
 - API キー・認証ヘッダーなどの秘密情報は、どのログにも保存しない（リクエストの本文から組み立て、ヘッダーは記録しない）。
 - 本文の保存期間は 90日（R-20）。`make retention`（`python -m ai_business_explorer.retention`）を手動または cron から起動して消す。メタデータは残し、消した日時を `payload_deleted_at` に記録する。

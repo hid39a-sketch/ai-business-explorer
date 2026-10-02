@@ -4,7 +4,7 @@
 第1回の実装は FakeLLMClient のみ（llm/fake.py）。
 """
 
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -74,6 +74,22 @@ class LLMClient(Protocol):
     def provider(self) -> str: ...
 
     def complete(self, request: LLMRequest) -> LLMResponse: ...
+
+
+# 実際に送った設定として記録する項目（第2回仕様 11章 SC候補-9）
+SENT_PARAM_NAMES = ("temperature", "thinking", "effort", "max_tokens")
+
+
+def sent_param(sent: bool, value: Any = None) -> dict[str, Any]:
+    """記録する1項目。送っていない項目は {"sent": false}（値を持たない）。"""
+    return {"sent": True, "value": value} if sent else {"sent": False}
+
+
+@runtime_checkable
+class ReportsSentParams(Protocol):
+    """実際に送る設定を返せるクライアント。返す値は記録に使うので、秘密情報を含めない。"""
+
+    def sent_params(self, request: LLMRequest) -> dict[str, Any]: ...
 
 
 class TrackingLLMClient:
