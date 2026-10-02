@@ -16,6 +16,9 @@ LLMClient の実装の1つ。AI社員・ドメインは llm/base.py の型だけ
   （AI社員の出力モデルの JSON Schema）を anthropic.transform_schema で API が受け付ける形にして
   送り、応答の JSON を LLMResponse.structured に入れる。「```json」の囲みなどを外す処理はしない。
   スキーマで表せない制約（C-09 など）は、これまでどおり AI社員とステージ実行側で検証する。
+- temperature は、実際に送るモデル ID が Haiku 4.5 のときだけ 0 を送る（第2回仕様 11章、
+  2026-10-02 の確定）。それ以外のモデル（Opus 5.5・Sonnet 5.5 など）には送らない。
+  LLMRequest.temperature は使わない。
 """
 
 import json
@@ -39,6 +42,8 @@ CLAUDE_DEFAULT_MODEL = "claude-opus-5-5"
 # 指定がないときの出力上限（非ストリーミングで HTTP のタイムアウトにかからない範囲）
 DEFAULT_MAX_TOKENS = 16_000
 MAX_ERROR_DETAIL = 500
+# temperature=0 を送るモデル（Haiku 4.5 の別名と日付付きの版）。送るモデル ID の完全一致で判定する
+ZERO_TEMPERATURE_MODELS = frozenset({"claude-haiku-4-5", "claude-haiku-4-5-20251001"})
 
 
 # SDK のクライアント（テストでは messages.create と with_options を持つ Fake に差し替える）
@@ -77,6 +82,8 @@ class ClaudeLLMClient:
             "system": request.system,
             "messages": [{"role": m.role, "content": m.content} for m in request.messages],
         }
+        if request.model in ZERO_TEMPERATURE_MODELS:
+            params["temperature"] = 0
         if request.response_schema is not None:
             params["output_config"] = {
                 "format": {

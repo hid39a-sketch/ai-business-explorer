@@ -22,9 +22,9 @@ from tests.fake_claude import FAKE_KEY, FakeClaudeSDK, FakeReply
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _request(**kwargs: object) -> LLMRequest:
+def _request(model: str = "claude-opus-5-5", **kwargs: object) -> LLMRequest:
     return LLMRequest(
-        model="claude-opus-5-5",
+        model=model,
         system="指示",
         messages=[LLMMessage(role="user", content='{"data": "外部の文章"}')],
         prompt_key="p",
@@ -41,7 +41,7 @@ def test_request_and_response_conversion() -> None:
     sdk = FakeClaudeSDK(replies=[FakeReply(input_tokens=120, output_tokens=30)])
     response = _client(sdk).complete(_request(temperature=0.5, timeout_seconds=120))
     [params] = sdk.requests
-    # 指示（system）とデータ（user）を分け、Opus 5.5 が受け付けない sampling は送らない
+    # 指示（system）とデータ（user）を分け、Opus 5.5 には temperature を送らない（11章）
     assert params == {
         "model": "claude-opus-5-5",
         "max_tokens": 16000,
@@ -55,6 +55,52 @@ def test_request_and_response_conversion() -> None:
     assert (response.usage.input_tokens, response.usage.output_tokens) == (120, 30)
     assert response.request_id == "req_fake_123"
     assert sdk.api_keys == [FAKE_KEY]
+
+
+@pytest.mark.parametrize(
+    ("model", "temperature"),
+    [
+        ("claude-haiku-4-5", 0),
+        ("claude-haiku-4-5-20251001", 0),
+        ("claude-opus-5-5", None),
+        ("claude-sonnet-5-5", None),
+    ],
+)
+@pytest.mark.parametrize("requested", [None, 0.7])
+def test_temperature_is_sent_only_to_haiku_4_5(
+    model: str, temperature: int | None, requested: float | None
+) -> None:
+    """送るモデル ID で決める。Haiku 4.5 だけ 0 で、他には送らない。
+
+    LLMRequest.temperature の値は使わない。
+    """
+    sdk = FakeClaudeSDK(replies=[FakeReply()])
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    _client(sdk).complete(_request(model=model, temperature=requested, response_schema=schema))
+    [params] = sdk.requests
+    expected = {
+        "model": model,
+        "max_tokens": 16000,
+        "system": "指示",
+        "messages": [{"role": "user", "content": '{"data": "外部の文章"}'}],
+        "output_config": {
+            "format": {"type": "json_schema", "schema": anthropic.transform_schema(schema)}
+        },
+    }
+    if temperature is not None:
+        expected["temperature"] = temperature
+    assert params == expected
+    assert "top_p" not in params
+    assert "top_k" not in params
+
+
+@pytest.mark.parametrize("model", ["claude-haiku-4", "claude-haiku-4-5-latest", "claude-3-5-haiku"])
+def test_other_haiku_like_ids_get_no_temperature(model: str) -> None:
+    """完全一致だけで判定する（似た ID には送らない）。"""
+    sdk = FakeClaudeSDK(replies=[FakeReply()])
+    _client(sdk).complete(_request(model=model))
+    [params] = sdk.requests
+    assert "temperature" not in params
 
 
 def test_max_tokens_never_exceeds_the_non_streaming_ceiling() -> None:
