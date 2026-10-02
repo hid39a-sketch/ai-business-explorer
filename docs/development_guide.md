@@ -42,6 +42,12 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 
 ローカルで試す場合は `LLM_SMOKE_CONFIRM=yes LLM_API_KEY=... uv run python -m ai_business_explorer.llm_smoke`（`APP_ENV=test` では動かない）。
 
+## LLM に送る設定と、入力の見積もり
+
+- temperature は Haiku 4.5（`claude-haiku-4-5`・`claude-haiku-4-5-20251001`）にだけ 0 を送り、他のモデルには送りません。temperature=0 でも同じ入力で同じ出力になるとは限りません（第2回仕様 11章 SC候補-9）。再現性は、実行の条件（入力・Prompt の版と hash・モデル・実際に送った設定）を追跡できることを指します。
+- thinking と effort は送らず、各モデルの既定を使います（SC候補-10）。既定はモデルの版で変わりうるので、実際に送った temperature・thinking・effort・max_tokens を `llm_calls.request_params` に記録します（送っていない項目は `{"sent": false}`）。
+- 呼ぶ前の入力の見積もり（`estimated_input_tokens`）は、system・メッセージ・スキーマの文字数の合計です。margin（文字数からトークン数への換算の誤差への余裕）は 0 です（SC候補-13）。実測では実際の入力トークンはすべて文字数より少なく（比は最大 0.908）、トークン数が文字数を超える入力では見積もりが少なくなりえます。見積もりは max_tokens を残りの予算で絞るためだけに使い、予算の予約には使いません。
+
 ## Prompt の版の切り替え（既存の DB）
 
 seed は AI社員がないときだけ作るので、Prompt の新しい版（例：idea_generator の v2、market_researcher の v4）を seed に入れても、既存の DB の AI社員は書き換わりません。既存の DB で切り替えるときは、admin が API で更新します（migration は使わない）。

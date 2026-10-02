@@ -102,11 +102,17 @@ def current_month() -> date:
 
 
 def estimated_input_tokens(request: LLMRequest) -> int:
-    """呼ぶ前の入力トークン数の見積もり（文字数をトークン数の目安にする。少なく見積もらない側）。
+    """呼ぶ前の入力トークン数の見積もり（文字数をトークン数の目安にする）。
 
     system とメッセージに加えて、構造化出力のスキーマ（response_schema）も入力として数える。
     スキーマは API への入力になり、送る形（Claude のクライアントは response_schema が None で
     なければ送る）と同じ条件で数える。実際の費用は、呼んだ後に API の使用量で記録する。
+
+    見積もりは文字数のまま使い、margin（文字数からトークン数への換算の誤差への余裕）は 0
+    （第2回仕様 10章 SC候補-13。実測19回で、実際の入力トークンはすべて文字数より少なく、比は最大
+    0.908）。トークン数が文字数を超える入力では、見積もりが少なくなりうる。その場合も、実際の費用が
+    実行の上限を超えれば、呼んだ後に budget_exceeded になる。見積もりは max_tokens を絞るためだけに
+    使い、予算の予約には使わない。
     """
     chars = len(request.system) + sum(len(m.content) for m in request.messages)
     if request.response_schema is not None:

@@ -18,7 +18,9 @@ LLMClient の実装の1つ。AI社員・ドメインは llm/base.py の型だけ
   スキーマで表せない制約（C-09 など）は、これまでどおり AI社員とステージ実行側で検証する。
 - temperature は、実際に送るモデル ID が Haiku 4.5 のときだけ 0 を送る（第2回仕様 11章、
   2026-10-02 の確定）。それ以外のモデル（Opus 5.5・Sonnet 5.5 など）には送らない。
-  LLMRequest.temperature は使わない。
+  LLMRequest.temperature は使わない。temperature=0 は同じ出力を保証しない（SC候補-9）。
+- thinking と effort は送らず、各モデルの既定を使う（11章 SC候補-10）。実際に送った設定は
+  sent_params で返し、llm_calls.request_params に記録する（SC候補-9）。
 """
 
 import json
