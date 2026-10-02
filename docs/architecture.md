@@ -55,7 +55,7 @@ PostgreSQL 16
 
 1. 人間が API からステージ実行を起動する（自動で次のステージへは進まない）。
 2. 事前検証：Idea が `adopted` か、前のステージに成功した最新の試行があるか、担当 AI社員が `active` で実装があるか、同じ範囲で置き換える試行がまだ終わっていない（`queued` / `running`）ことはないか（あれば 409）。
-3. 担当を決める。primary は、人間が指定した `ai_employee_id` → `stage_assignments` の primary → 有効な社員が1人だけならその社員、の順。secondary は人間が `secondary_ai_employee_ids` で選んだ社員で、そのステージに secondary として割り当てられている必要がある。
+3. 担当を決める。primary は、人間が指定した `ai_employee_id` → `stage_assignments` の primary → 有効な社員が1人だけならその社員、の順。secondary は人間が `secondary_ai_employee_ids` で選んだ社員で、そのステージに secondary として割り当てられている必要がある。実装・Prompt（key と version の両方）・解決後の（provider, model）がすべて primary と同じ secondary は使えない（V-08。割り当ての作成時と起動時の両方で確かめ、違反は 422）。
 4. `stage_runs` と `executions`（primary と secondary それぞれ1件）を `queued` で作成してコミットし、**202** を返す。再実行・差し戻しの場合は、対象ステージ以降の最新試行に `superseded_at` を記録する。
 5. ワーカー（`make worker`）が最も古い `queued` を1つ取り出し（`FOR UPDATE SKIP LOCKED`）、`running` にして実行する。実行中は別のセッションで `heartbeat_at` を更新する。`EXECUTION_MODE=sync`（テストと Fake LLM 用）では、応答の前に同じ処理で実行する。
 6. AI に渡す入力を、実行を始めた時点で決める。Evidence は active のものだけ（superseded・retracted・purged は渡さない）。前段の分析は、成功した最新の試行の **primary** のものだけで、レビューの状態に関係なく渡す（reject されたものも除外しない）。前段の分析には、その時点のレビューの状態（`review_status`）と、分析全体（claim_id なし）の最新のレビュー1件（decision・comment・corrections）を付ける（V-07）。渡した ID と状態（Evidence の状態、分析のレビューの状態と最新のレビューの ID）は `stage_runs.input_snapshot` に残し、後でレビューが変わっても書き換えない。

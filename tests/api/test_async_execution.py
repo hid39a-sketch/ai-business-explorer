@@ -6,6 +6,7 @@
 import time
 from collections.abc import Callable
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -26,17 +27,23 @@ from ai_business_explorer.application.stage_runs import (
     fail_stale_runs,
 )
 from ai_business_explorer.config import Settings
+from ai_business_explorer.domain.enums import PricingKind
 from ai_business_explorer.infrastructure.db.models import (
     Actor,
     Analysis,
     Execution,
     Idea,
+    Pricing,
     StageRun,
 )
 from ai_business_explorer.infrastructure.db.repositories import scope_to_organization
 from ai_business_explorer.llm.base import LLMError
 from ai_business_explorer.llm.fake import DEFAULT_RESPONDERS, FakeLLMClient
-from ai_business_explorer.seed import DEFAULT_HUMAN_ACTOR_ID, DEFAULT_ORGANIZATION_ID
+from ai_business_explorer.seed import (
+    DEFAULT_HUMAN_ACTOR_ID,
+    DEFAULT_ORGANIZATION_ID,
+    FAKE_PRICING_EFFECTIVE_FROM,
+)
 from ai_business_explorer.tools.base import ToolRegistry, default_tool_registry
 from ai_business_explorer.worker import _Heartbeat, run_once
 from tests.api.test_rerun_send_back import _TestCompetitorResearcher
@@ -61,8 +68,33 @@ def _work(session_factory: sessionmaker[Session], settings: Settings) -> bool:
     )
 
 
+# secondary 用の Fake のモデル。primary（seed の fake-model-v1）と実装・Prompt が同じでも、モデルが
+# 違えば同じ構成ではない（V-08）。Fake でも単価の行がないと実行できないので、下の fixture で登録する
+SECONDARY_FAKE_MODEL = "fake-model-secondary"
+
+
+@pytest.fixture(autouse=True)
+def _secondary_model_pricing(session: Session) -> None:
+    session.add(
+        Pricing(
+            kind=PricingKind.LLM.value,
+            provider="fake",
+            model=SECONDARY_FAKE_MODEL,
+            input_per_million_tokens=Decimal(0),
+            output_per_million_tokens=Decimal(0),
+            per_call=Decimal(0),
+            currency="USD",
+            effective_from=FAKE_PRICING_EFFECTIVE_FROM,
+        )
+    )
+    session.commit()
+
+
 def _secondary(api: Api, stage_key: str, key: str, implementation: str, prompt: str) -> str:
-    """同じステージに secondary の AI社員を登録して割り当てる（admin）。"""
+    """同じステージに secondary の AI社員を登録して割り当てる（admin）。
+
+    primary と同じ構成は割り当てられないので（V-08）、モデルだけ primary と変える。
+    """
     employee = api.post(
         "/ai-employees",
         {
@@ -74,6 +106,7 @@ def _secondary(api: Api, stage_key: str, key: str, implementation: str, prompt: 
             "prompt_key": prompt,
             "prompt_version": "v1",
             "status": "active",
+            "llm_config": {"provider": "fake", "model": SECONDARY_FAKE_MODEL},
         },
     )
     api.post(

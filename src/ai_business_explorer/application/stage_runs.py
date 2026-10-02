@@ -61,6 +61,7 @@ from ai_business_explorer.application.costs import (
     find_pricing,
 )
 from ai_business_explorer.application.pagination import Page, PageRequest, paginate
+from ai_business_explorer.application.stage_assignments import ensure_different_configuration
 from ai_business_explorer.config import Settings
 from ai_business_explorer.domain.enums import (
     ACTIVE_RUN_STATUSES,
@@ -462,6 +463,9 @@ class StageRunService:
                     f"ai_employee {employee_id} is not assigned as secondary to '{stage.key}'"
                 )
             employee = self.employees.get_or_raise(employee_id)
+            # 一緒に動く primary と同じ構成の secondary は使えない（V-08。割り当て時に加えて、
+            # primary の差し替えや設定の変更があっても、起動の直前に必ず確かめる）
+            ensure_different_configuration(employee, primary, self.settings.llm_provider)
             members.append(
                 _Member(employee, self._agent_for(employee), StageAssignmentRole.SECONDARY)
             )
