@@ -13,6 +13,7 @@
   保存期間で消す）に分ける。confidential 以上の本文は保存しない。秘密情報は保存しない。
 """
 
+import json
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -97,6 +98,19 @@ def month_range(month: date) -> tuple[datetime, datetime]:
 def current_month() -> date:
     now = utcnow()
     return date(now.year, now.month, 1)
+
+
+def estimated_input_tokens(request: LLMRequest) -> int:
+    """呼ぶ前の入力トークン数の見積もり（文字数をトークン数の目安にする。少なく見積もらない側）。
+
+    system とメッセージに加えて、構造化出力のスキーマ（response_schema）も入力として数える。
+    スキーマは API への入力になり、送る形（Claude のクライアントは response_schema が None で
+    なければ送る）と同じ条件で数える。実際の費用は、呼んだ後に API の使用量で記録する。
+    """
+    chars = len(request.system) + sum(len(m.content) for m in request.messages)
+    if request.response_schema is not None:
+        chars += len(json.dumps(request.response_schema, ensure_ascii=False))
+    return chars
 
 
 def find_pricing(
@@ -506,9 +520,9 @@ class ExecutionMeter:
         pricing = find_pricing(self.session, PricingKind.LLM, provider, request.model, utcnow())
         if pricing is None or pricing.output_per_million_tokens <= 0:
             return None
-        chars = len(request.system) + sum(len(m.content) for m in request.messages)
+        tokens = estimated_input_tokens(request)
         input_cost = (
-            Decimal(chars) * pricing.input_per_million_tokens / TOKENS_PER_UNIT + pricing.per_call
+            Decimal(tokens) * pricing.input_per_million_tokens / TOKENS_PER_UNIT + pricing.per_call
         )
         remaining = self.cost_limit - self.execution.cost_amount - input_cost
         return int(remaining * TOKENS_PER_UNIT / pricing.output_per_million_tokens)

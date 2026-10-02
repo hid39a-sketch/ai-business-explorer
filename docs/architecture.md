@@ -92,7 +92,7 @@ PostgreSQL 16
 - `llm/claude.py` が公式 SDK（`anthropic`）で Messages API を1回呼ぶ。SDK の型は外に出さない。指示（Prompt ファイル）は `system` に、Evidence など外部由来のデータを含む入力は `user` の JSON に分けて渡す。Tool は ToolBox 経由で、API の tool use は使わない。
 - 出力の形は構造化出力で指定する（PR-10）。AI社員が作る `LLMRequest.response_schema`（出力モデルの JSON Schema）を `anthropic.transform_schema` で API が受け付ける形にし、`output_config.format`（`type: json_schema`）として送る。応答の JSON オブジェクトは `LLMResponse.structured` に入れる。「```json」の囲みを外す処理はせず、JSON オブジェクトでない応答は AI社員の検証で `validation_error` になる。スキーマは実行ごとに作る（`agents/base.py` の `output_schema_for`）：Evidence がある実行では `evidence_id` をその実行で入力した Evidence の ID の enum に限定し、Evidence が0件の実行（アイデア生成は常にこちら）では主張から `evidence_refs` を除き、`kind` を inference / speculation に限定する。スキーマで表せない規則（C-09 の組み合わせ、文字数・件数、入力外の Evidence 参照）は、Pydantic とステージ実行側の検証で引き続き確かめる。
 - SDK の自動再試行はしない（`max_retries=0`）。1回の呼び出し＝1回の記録・計上にして、回数と費用の上限を正しく効かせるため。呼び出しの上限秒数（120秒）は呼び出しごとに渡す。出力の上限は 16,000 トークン（非ストリーミングの範囲）。
-- 費用の上限（10章）：呼び出しの前に、残りの1実行あたりの費用上限で払える出力トークン数まで `max_tokens` を絞り、払えなければ呼ばずに `budget_exceeded` にする。断られた（refusal）・途中で切れた（max_tokens）応答も、使ったトークン分の費用を記録してから `llm_error` にする（E-07）。
+- 費用の上限（10章）：呼び出しの前に、残りの1実行あたりの費用上限で払える出力トークン数まで `max_tokens` を絞り（入力は system・メッセージ・構造化出力のスキーマの文字数で見積もる。`estimated_input_tokens`）、払えなければ呼ばずに `budget_exceeded` にする。断られた（refusal）・途中で切れた（max_tokens）応答も、使ったトークン分の費用を記録してから `llm_error` にする（E-07）。
 - データ分類（11章）：送信上限は `LLM_MAX_CLASSIFICATION` で、指定がなければ internal（R-03。契約条件を確認するまで変えない）。restricted はどの LLM にも送らない。
 - API キー（`LLM_API_KEY`、SecretStr）は SDK のクライアントにだけ渡す。環境の他の認証情報（`ANTHROPIC_API_KEY`・ログイン済みのプロファイル）は使わない。キーは LLM ログ・例外のメッセージ・監査ログに入らない。キーが未設定なら anthropic の AI社員は `llm_error` で失敗し、テスト・CI には影響しない。
 - `APP_ENV=test` では実際のプロバイダーを使わない（テストや CI が実 API を呼ばないための安全装置）。テストは Fake LLM と、SDK を差し替えた Fake で行う。
