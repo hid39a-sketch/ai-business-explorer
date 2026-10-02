@@ -72,7 +72,7 @@ Prompt の key と版（`prompt_key`, `prompt_version`）で、出力契約（�
 - 実装と `prompt_key` が一致しない AI社員は、新しく作れません（422）。実装・`prompt_key`・`prompt_version` を変えて不一致になる更新も 422 です（第2回仕様 17章 C1）。
 - この規則の前からある不一致の AI社員は、自動では移行しません。経過措置として v1 契約で実行でき、v2 契約には切り替わりません。一致させる更新（例：`prompt_key` を実装と同じにする）は通ります。不一致の構成を正式に許すものではありません。
 - AI社員の版（`version`）が1つ上がり、変更前後が監査ログに残ります。過去の実行は、実行ごとに記録した `prompt_version` と `prompt_hash` で追跡できます。
-- LLM に送る出力スキーマは実行のたびにコードから作るので（`output_schema_for`）、AI社員に保存されている `output_format` が古くても、実行には影響しません。`output_format` は作成時の記録で、自動では作り直されません。
+- LLM に送る出力スキーマは実行のたびにコードから作るので（`output_schema_for`）、AI社員に保存されている `output_format` が古くても、実行には影響しません。`output_format` は記録用です。実装・`prompt_key`・`prompt_version` を変える更新で `output_format` を指定しなければ、新しい出力契約のスキーマに入れ直されます（指定すればその値を使います）。
 
 ## テスト構成
 
