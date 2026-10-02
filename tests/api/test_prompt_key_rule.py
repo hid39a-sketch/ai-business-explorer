@@ -99,6 +99,22 @@ def test_existing_mismatch_is_kept_but_cannot_be_changed_into_another_mismatch(
     api.patch(path, {"prompt_key": "idea_generator", "prompt_version": "v2"})
     after = api.get(path)
     assert (after["prompt_key"], after["prompt_version"]) == ("idea_generator", "v2")
+    # prompt_key と prompt_version を変え、output_format を指定しないので、v2 のスキーマになる
+    assert after["output_format"]["title"] == "IdeaGeneratorOutputV2"
+
+
+def test_prompt_key_change_sets_the_contract_schema(api: Api, session: Session) -> None:
+    """prompt_key だけを変えて一致させても、output_format は今の契約のスキーマになる。"""
+    employee = _legacy(api, session, "ig_key_only", ("market_researcher", "v1"))
+    row = session.get(AIEmployee, UUID(employee["id"]))
+    assert row is not None
+    row.output_format = {"type": "object"}  # 古い記録
+    session.commit()
+    path = f"/ai-employees/{employee['id']}"
+    # Prompt を変えない更新では入れ直さない
+    assert api.patch(path, {"name": "renamed"})["output_format"] == {"type": "object"}
+    after = api.patch(path, {"prompt_key": "idea_generator"})
+    assert after["output_format"]["title"] == "IdeaGeneratorOutput"
 
 
 def _idea_reply(claims: int) -> dict[str, Any]:

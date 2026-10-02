@@ -1,3 +1,5 @@
+from typing import Any
+
 from tests.conftest import Api
 
 
@@ -117,3 +119,44 @@ def test_new_employee_can_be_added_and_executed_for_a_new_stage_definition(api: 
     run = api.post(f"/explorations/{exp['id']}/stage-runs", {})
     assert run["status"] == "succeeded"
     assert run["executions"][0]["ai_employee_id"] == second["id"]
+
+
+def _claims_schema(employee: dict[str, Any]) -> dict[str, Any]:
+    claims: dict[str, Any] = employee["output_format"]["properties"]["claims"]
+    return claims
+
+
+def _ig(key: str) -> dict[str, object]:
+    return _payload(
+        key=key,
+        stage_key="idea_generation",
+        implementation_key="idea_generator",
+        prompt_key="idea_generator",
+        prompt_version="v1",
+        output_format=None,
+        input_format=None,
+    )
+
+
+def test_prompt_change_without_output_format_sets_the_new_contract_schema(api: Api) -> None:
+    """Prompt の版を変え、output_format を指定しなければ、新しい契約のスキーマになる（17章）。"""
+    employee = api.post("/ai-employees", _ig("ig_switch"))
+    path = f"/ai-employees/{employee['id']}"
+    assert employee["output_format"]["title"] == "IdeaGeneratorOutput"
+    v2 = api.patch(path, {"prompt_version": "v2"})
+    assert v2["output_format"]["title"] == "IdeaGeneratorOutputV2"
+    assert _claims_schema(v2)["maxItems"] == 10
+    # 戻すと v1 のスキーマに戻る
+    v1 = api.patch(path, {"prompt_version": "v1"})
+    assert v1["output_format"]["title"] == "IdeaGeneratorOutput"
+    assert "maxItems" not in _claims_schema(v1)
+
+
+def test_prompt_change_keeps_an_explicit_output_format(api: Api) -> None:
+    employee = api.post("/ai-employees", _ig("ig_explicit"))
+    path = f"/ai-employees/{employee['id']}"
+    custom = {"type": "object", "title": "Custom"}
+    updated = api.patch(path, {"prompt_version": "v2", "output_format": custom})
+    assert updated["output_format"] == custom
+    # Prompt を変えない更新では、output_format はそのまま
+    assert api.patch(path, {"name": "renamed"})["output_format"] == custom

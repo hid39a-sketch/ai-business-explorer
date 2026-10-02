@@ -102,7 +102,13 @@ class AIEmployeeService:
             setattr(employee, field, value)  # llm_config は dict として格納される
         if cmd.status is not None:
             employee.status = cmd.status.value
-        self._validate_and_fill(employee, prompt_changed=_prompt_fields(employee) != prompt_before)
+        prompt_changed = _prompt_fields(employee) != prompt_before
+        self._validate_and_fill(
+            employee,
+            prompt_changed=prompt_changed,
+            # 契約が変わりうる更新で output_format を指定しなければ、新しい契約のスキーマにする
+            refresh_output_format=prompt_changed and "output_format" not in changes,
+        )
         # provider か model が変わる更新だけ、単価を確かめる（10章 SC候補-12。422）
         resolved_after = resolve_llm_config(employee.llm_config, default_provider)
         if resolved_after != resolved_before:
@@ -123,10 +129,13 @@ class AIEmployeeService:
         self.session.commit()
         return employee
 
-    def _validate_and_fill(self, employee: AIEmployee, *, prompt_changed: bool) -> None:
+    def _validate_and_fill(
+        self, employee: AIEmployee, *, prompt_changed: bool, refresh_output_format: bool = False
+    ) -> None:
         """prompt_changed：実装・prompt_key・prompt_version のどれかを設定・変更するか。
 
-        作成では常に真。
+        作成では常に真。refresh_output_format：output_format を今の出力契約のスキーマで入れ直すか
+        （更新で契約が変わりうるのに、output_format を指定しないとき）。
         """
         stage = get_stage(employee.stage_key)
         if not stage.executable_by_ai:
@@ -174,7 +183,7 @@ class AIEmployeeService:
         contract = agent.contract_for(employee.prompt_key, employee.prompt_version)
         if employee.input_format is None:
             employee.input_format = agent.input_model.model_json_schema()
-        if employee.output_format is None:
+        if employee.output_format is None or refresh_output_format:
             employee.output_format = contract.output_model.model_json_schema()
 
 
