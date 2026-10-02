@@ -156,10 +156,11 @@ def test_later_reviews_do_not_change_the_recorded_input(
     assert via_api["input_snapshot"]["analyses"][0]["review_decision"] == "reject"
 
 
-def test_market_researcher_uses_prompt_v3(
+def test_market_researcher_uses_seed_prompt_v4(
     api: Api, session: Session, settings: Settings, human: Actor, setup: dict[str, Any]
 ) -> None:
+    """seed は v4（v3 のレビュー情報の扱いを含む。出力契約 v2）。"""
     _, execution, sdk = _run_market(session, settings, human, setup["idea"])
-    v3 = load_prompt("market_researcher", "v3")
-    assert (execution.prompt_version, execution.prompt_hash) == ("v3", v3.sha256)
-    assert sdk.requests[0]["system"] == v3.text
+    v4 = load_prompt("market_researcher", "v4")
+    assert (execution.prompt_version, execution.prompt_hash) == ("v4", v4.sha256)
+    assert sdk.requests[0]["system"] == v4.text

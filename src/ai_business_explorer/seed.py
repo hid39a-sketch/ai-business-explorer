@@ -61,7 +61,9 @@ SEED_EMPLOYEES = [
         "stage_key": IDEA_GENERATION,
         "implementation_key": "idea_generator",
         "prompt_key": "idea_generator",
-        "prompt_version": "v1",
+        # v2：出力契約 v2（第2回仕様 17章）。v1 は変更しない。
+        # seed は AI社員がないときだけ作るので、既存の DB の AI社員は書き換えない
+        "prompt_version": "v2",
     },
     {
         "key": "market_researcher",
@@ -74,10 +76,10 @@ SEED_EMPLOYEES = [
         "stage_key": "market_research",
         "implementation_key": "market_researcher",
         "prompt_key": "market_researcher",
-        # v3：v2（relation の意味）に、前段の分析のレビュー情報の扱い（V-07）を加えた版。
-        # v1・v2 は変更しない。
+        # v4：v3（relation の意味・レビュー情報の扱い）に出力契約 v2（17章）を加えた版。
+        # v1〜v3 は変更しない（出力契約 v1 のまま）。
         # seed は AI社員がないときだけ作るので、既存の DB の AI社員は書き換えない
-        "prompt_version": "v3",
+        "prompt_version": "v4",
     },
 ]
 
@@ -171,7 +173,7 @@ def _create_employee(session: Session, registry: AgentRegistry, spec: dict[str, 
         llm_config={"provider": FAKE_PROVIDER, "model": FAKE_MODEL},
         allowed_tools=[],
         input_format=agent.input_model.model_json_schema(),
-        output_format=agent.output_model.model_json_schema(),
+        output_format=agent.contract_for(spec["prompt_version"]).output_model.model_json_schema(),
         status=AIEmployeeStatus.ACTIVE.value,
         version=1,
     )

@@ -43,7 +43,9 @@ def test_seeded_fake_employees_are_active_with_formats(api: Api) -> None:
     ig = employees["idea_generator"]
     assert ig["status"] == "active"
     assert ig["prompt_key"] == "idea_generator"
-    assert ig["output_format"]["title"] == "IdeaGeneratorOutput"
+    # seed は出力契約 v2（Prompt v2）。output_format はその出力モデルのスキーマ（第2回仕様 17章）
+    assert ig["prompt_version"] == "v2"
+    assert ig["output_format"]["title"] == "IdeaGeneratorOutputV2"
 
 
 def test_validation_rules(api: Api) -> None:

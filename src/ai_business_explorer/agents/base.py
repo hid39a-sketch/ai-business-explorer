@@ -8,12 +8,16 @@
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ai_business_explorer.domain.enums import ClaimKind, EvidenceRelation
+from ai_business_explorer.domain.errors import DomainValidationError
 from ai_business_explorer.llm.base import LLMClient
 from ai_business_explorer.prompts.loader import PromptTemplate
 from ai_business_explorer.tools.base import ToolBox
@@ -177,12 +181,36 @@ class AgentOutputError(Exception):
     """AI社員の出力が出力スキーマや分離ルールに反する。"""
 
 
+@dataclass(frozen=True)
+class OutputContract:
+    """出力契約（第2回仕様 17章）：出力モデルと、その版（分析の schema_version に記録する）。"""
+
+    schema_version: str
+    output_model: type[BaseModel]
+
+
 class Agent(ABC):
     implementation_key: ClassVar[str]
     stage_key: ClassVar[str]
+    # 出力契約が1つだけの実装の契約。output_contracts を持つ実装では使わない
     output_schema_version: ClassVar[str]
     input_model: ClassVar[type[BaseModel]]
     output_model: ClassVar[type[BaseModel]]
+    # Prompt の版 → 出力契約（17章）。空でなければ、ここにない Prompt の版は使えない
+    output_contracts: ClassVar[Mapping[str, OutputContract]] = MappingProxyType({})
+
+    @classmethod
+    def contract_for(cls, prompt_version: str) -> OutputContract:
+        """Prompt の版から出力契約を一意に決める（17章）。対応がなければ DomainValidationError。"""
+        if not cls.output_contracts:
+            return OutputContract(cls.output_schema_version, cls.output_model)
+        contract = cls.output_contracts.get(prompt_version)
+        if contract is None:
+            raise DomainValidationError(
+                f"no output contract for {cls.implementation_key} prompt {prompt_version} "
+                f"(supported: {', '.join(sorted(cls.output_contracts))})"
+            )
+        return contract
 
     @abstractmethod
     def run(self, ctx: AgentContext) -> AnalysisDraft: ...

@@ -18,6 +18,10 @@ from tests.conftest import Api
 SAME = "has the same implementation, prompt and model as the primary"
 
 
+# seed の primary の Prompt の版（出力契約 v2。第2回仕様 17章）
+SEED_PROMPT_VERSIONS = {"idea_generation": "v2", "market_research": "v4"}
+
+
 def _employee(api: Api, key: str, stage_key: str = "idea_generation", **fields: Any) -> Any:
     implementation = "idea_generator" if stage_key == "idea_generation" else "market_researcher"
     body = {
@@ -27,7 +31,7 @@ def _employee(api: Api, key: str, stage_key: str = "idea_generation", **fields: 
         "stage_key": stage_key,
         "implementation_key": implementation,
         "prompt_key": implementation,
-        "prompt_version": "v1",
+        "prompt_version": SEED_PROMPT_VERSIONS[stage_key],
         "status": "active",
         "llm_config": {"provider": "fake", "model": "fake-model-v1"},
         **fields,
@@ -49,7 +53,7 @@ def _primary(api: Api, stage_key: str) -> Any:
 
 
 def test_same_configuration_is_rejected_on_assignment(api: Api) -> None:
-    """seed の primary（idea_generator / v1 / fake / fake-model-v1）と同じ構成は割り当てない。"""
+    """seed の primary（idea_generator / v2 / fake / fake-model-v1）と同じ構成は割り当てない。"""
     clone = _employee(api, "ig_clone")
     res = api.client.post(
         "/api/v1/stage-assignments",
@@ -77,10 +81,10 @@ def test_any_difference_is_allowed_on_assignment(
 
 
 def test_different_prompt_version_is_allowed(api: Api) -> None:
-    """同じ Prompt の別の版は別の Prompt（primary の market_researcher は seed の v3）。"""
-    assert _primary(api, "market_research")["prompt_version"] == "v3"
-    _assign(api, _employee(api, "mr_v2", "market_research", prompt_version="v2"))
-    clone = _employee(api, "mr_v3", "market_research", prompt_version="v3")
+    """同じ Prompt の別の版は別の Prompt（primary の market_researcher は seed の v4）。"""
+    assert _primary(api, "market_research")["prompt_version"] == "v4"
+    _assign(api, _employee(api, "mr_v3", "market_research", prompt_version="v3"))
+    clone = _employee(api, "mr_v4", "market_research", prompt_version="v4")
     _assign(api, clone, expect=422)
 
 
@@ -159,7 +163,6 @@ def test_idea_stage_launch_is_checked_too(api: Api) -> None:
         api,
         "mr_b",
         "market_research",
-        prompt_version="v3",
         llm_config={"provider": "fake", "model": "fake-model-b"},
     )
     _assign(api, secondary)

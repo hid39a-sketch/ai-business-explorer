@@ -44,15 +44,25 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 
 ## Prompt の版の切り替え（既存の DB）
 
-seed は AI社員がないときだけ作るので、Prompt の新しい版（例：market_researcher の v3）を seed に入れても、既存の DB の AI社員は書き換わりません。既存の DB で切り替えるときは、admin が API で更新します（migration は使わない）。
+seed は AI社員がないときだけ作るので、Prompt の新しい版（例：idea_generator の v2、market_researcher の v4）を seed に入れても、既存の DB の AI社員は書き換わりません。既存の DB で切り替えるときは、admin が API で更新します（migration は使わない）。
 
 ```bash
 curl -X PATCH http://localhost:8000/api/v1/ai-employees/<market_researcher の id> \
   -H "X-Actor-Id: <admin の actor id>" -H "Content-Type: application/json" \
-  -d '{"prompt_version": "v3"}'
+  -d '{"prompt_version": "v4"}'
 ```
 
-- Prompt のファイル（`prompts/<key>/<version>.md`）がなければ 422 で拒否されます。
+Prompt の版で、出力契約（出力モデルと分析の `schema_version`）が決まります（第2回仕様 17章）。対応は各 AI社員の実装の `output_contracts` にあり、`Agent.contract_for` で引きます。
+
+| 実装 | Prompt の版 | 出力契約 | schema_version |
+|---|---|---|---|
+| idea_generator | v1 | v1 | idea_generation.v1 |
+| idea_generator | v2 | v2（日本語・ideas の既定5件・claims 10件まで・出典のない数値は推定と明示） | idea_generation.v2 |
+| market_researcher | v1・v2・v3 | v1 | market_research.v1 |
+| market_researcher | v4 | v2（上に加えて、一般化は inference・relation は context） | market_research.v2 |
+
+- 新しい seed は idea_generator v2・market_researcher v4 で作ります。v1 の Prompt・出力モデルは変えていないので、切り替えなければ既存の AI社員の挙動は変わりません。
+- Prompt のファイル（`prompts/<key>/<version>.md`）がない版、または出力契約のない版は 422 で拒否されます。
 - AI社員の版（`version`）が1つ上がり、変更前後が監査ログに残ります。過去の実行は、実行ごとに記録した `prompt_version` と `prompt_hash` で追跡できます。
 - LLM に送る出力スキーマは実行のたびにコードから作るので（`output_schema_for`）、AI社員に保存されている `output_format` が古くても、実行には影響しません。`output_format` は作成時の記録で、自動では作り直されません。
 

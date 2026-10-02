@@ -518,6 +518,11 @@ class StageRunService:
             employee.prompt_key, employee.prompt_version
         ):
             raise InvalidStateError(f"ai_employee {employee.id} prompt is missing")
+        try:
+            # Prompt の版に対応する出力契約がなければ起動しない（17章）
+            agent.contract_for(employee.prompt_version)
+        except DomainValidationError as exc:
+            raise InvalidStateError(str(exc)) from exc
         return agent
 
     # ------------------------------------------------------------------ 受付
@@ -922,7 +927,8 @@ class StageRunService:
                 execution_id=execution.id,
                 ai_employee_id=employee.id,
                 stage_key=stage_run.stage_key,
-                schema_version=agent.output_schema_version,
+                # 出力契約の版は、この実行の Prompt の版から決まる（17章）
+                schema_version=agent.contract_for(execution.prompt_version or "").schema_version,
                 version_no=(previous.version_no + 1) if previous else 1,
                 supersedes_id=previous.id if previous else None,
                 summary=draft.summary,

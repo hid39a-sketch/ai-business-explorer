@@ -139,11 +139,13 @@ class AIEmployeeService:
                 f"implementation '{agent.implementation_key}' handles stage '{agent.stage_key}', "
                 f"not '{employee.stage_key}'"
             )
-        if employee.prompt_key is None:
+        if employee.prompt_key is None or employee.prompt_version is None:
             raise DomainValidationError(
                 "an implemented AI employee requires prompt_key/prompt_version"
             )
+        # Prompt の版に対応する出力契約がなければ使えない（第2回仕様 17章。422）
+        contract = agent.contract_for(employee.prompt_version)
         if employee.input_format is None:
             employee.input_format = agent.input_model.model_json_schema()
         if employee.output_format is None:
-            employee.output_format = agent.output_model.model_json_schema()
+            employee.output_format = contract.output_model.model_json_schema()

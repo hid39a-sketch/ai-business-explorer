@@ -33,8 +33,8 @@ def test_idea_generation_success_records_execution_and_candidates(api: Api) -> N
     assert ex["status"] == "succeeded"
     assert ex["error_type"] is None
     assert ex["prompt_key"] == "idea_generator"
-    assert ex["prompt_version"] == "v1"
-    assert ex["prompt_hash"] == load_prompt("idea_generator", "v1").sha256
+    assert ex["prompt_version"] == "v2"  # seed の idea_generator は v2（17章）
+    assert ex["prompt_hash"] == load_prompt("idea_generator", "v2").sha256
     assert ex["llm_provider"] == "fake"
     assert ex["llm_model"] == "fake-model-v1"
     assert ex["code_version"] == "test-sha"
@@ -51,7 +51,8 @@ def test_idea_generation_success_records_execution_and_candidates(api: Api) -> N
     assert {i["origin_analysis_id"] for i in ideas} == {analysis_id}
     analysis = api.get(f"/analyses/{analysis_id}")
     assert analysis["review_status"] == "pending_review"
-    assert analysis["schema_version"] == "idea_generation.v1"
+    # seed の idea_generator は Prompt v2 なので出力契約 v2（第2回仕様 17章）
+    assert analysis["schema_version"] == "idea_generation.v2"
 
 
 def test_ai_generated_candidate_cannot_run_stages_until_adopted(api: Api) -> None:

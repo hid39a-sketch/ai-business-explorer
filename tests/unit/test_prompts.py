@@ -80,8 +80,54 @@ def test_market_researcher_v3_keeps_v2_and_adds_review_handling() -> None:
         assert phrase in v3, phrase
 
 
-def test_seed_uses_market_researcher_v3() -> None:
+def test_seed_uses_output_contract_v2_prompts() -> None:
+    """新しい seed は出力契約 v2 の Prompt（idea_generator v2・market_researcher v4。17章）。"""
     from ai_business_explorer.seed import SEED_EMPLOYEES
 
     versions = {e["key"]: e["prompt_version"] for e in SEED_EMPLOYEES}
-    assert versions == {"idea_generator": "v1", "market_researcher": "v3"}
+    assert versions == {"idea_generator": "v2", "market_researcher": "v4"}
+
+
+# 出力契約 v1 の Prompt は変更しない（17章）
+UNCHANGED_PROMPTS = {
+    ("idea_generator", "v1"): "96fc177a1319c3d19024ba90868e2d3cb38fa3083a92b0b1caaaecbd0193ed05",
+    ("market_researcher", "v1"): "e4f61bf4df1145c6f2253f228ac4bf8eeb64446637e3d929f601a91e1e7c83a2",
+    ("market_researcher", "v3"): "bcab07de15a657ecd8af566c0a1aa3f2a8619754bc5d82eb246dd36815a78e3b",
+}
+
+
+def test_contract_v1_prompts_are_unchanged() -> None:
+    for (key, version), digest in UNCHANGED_PROMPTS.items():
+        assert load_prompt(key, version).sha256 == digest, (key, version)
+
+
+CONTRACT_V2_RULES = (
+    "出力の文章はすべて日本語で書いてください",
+    "引用・固有名詞・URL は原文のまま",
+    "claims は最大10件です",
+    "推定値・概算・仮説などであることを明示し、事実として断定しないでください",
+)
+
+
+def test_idea_generator_v2_states_contract_v2_rules() -> None:
+    v2 = load_prompt("idea_generator", "v2").text
+    for phrase in (*CONTRACT_V2_RULES, "指定されていなければ、5件", "ideas の summary・problem"):
+        assert phrase in v2, phrase
+
+
+def test_market_researcher_v4_keeps_v3_review_handling_and_adds_contract_v2() -> None:
+    v3 = load_prompt("market_researcher", "v3").text
+    v4 = load_prompt("market_researcher", "v4").text
+    # v3 の行は、kind の定義（evidence_based・inference）の2行を除いてそのまま含む
+    changed = ('  - "evidence_based"', '  - "inference"')
+    for line in v3.splitlines():
+        if line.startswith(changed):
+            continue
+        assert line in v4, line
+    for phrase in (
+        *CONTRACT_V2_RULES,
+        "summary・market_overview",
+        "Evidence に直接書かれている範囲を超える一般化",
+        'inference に Evidence を付ける場合、relation は "context" だけ',
+    ):
+        assert phrase in v4, phrase
