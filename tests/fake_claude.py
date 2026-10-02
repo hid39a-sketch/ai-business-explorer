@@ -1,9 +1,15 @@
 """Claude API の SDK クライアントの Fake（実際の API には接続しない）。"""
 
+import inspect
 import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
+
+from anthropic.resources.messages import Messages
+
+# 実際の SDK の messages.create の引数（受け付けない引数は、実際の SDK と同じく TypeError にする）
+_CREATE_SIGNATURE = inspect.signature(Messages.create)
 
 FAKE_KEY = "sk-ant-test-fake-key-never-sent"
 
@@ -37,6 +43,7 @@ class FakeClaudeSDK:
         return self
 
     def _create(self, **kwargs: Any) -> Any:
+        _CREATE_SIGNATURE.bind(None, **kwargs)
         self.requests.append(kwargs)
         reply = self.replies.pop(0) if self.replies else FakeReply()
         if reply.error is not None:

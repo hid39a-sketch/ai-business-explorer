@@ -83,7 +83,8 @@ class ClaudeLLMClient:
             "messages": [{"role": m.role, "content": m.content} for m in request.messages],
         }
         if request.model in ZERO_TEMPERATURE_MODELS:
-            params["temperature"] = 0
+            # SDK（1.11）の messages.create には temperature の引数がないので、本文に直接足す
+            params["extra_body"] = {"temperature": 0}
         if request.response_schema is not None:
             params["output_config"] = {
                 "format": {
