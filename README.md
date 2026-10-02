@@ -40,6 +40,8 @@ make check     # lint + typecheck + test + alembic check
 
 Docker を使わない場合は、PostgreSQL 16 を用意して `DATABASE_URL` と `TEST_DATABASE_URL` を設定してください。
 
+Windows（PowerShell）で `make` がない場合は、Makefile の中の `uv run ...` を直接実行します。`uv run` が `os error 396`（ハードリンク）で失敗する場合は、先に `$env:UV_LINK_MODE = "copy"` を実行してください。古い版の DB を最新にする手順と注意点は [docs/production_migration/LOCAL_WINDOWS.md](docs/production_migration/LOCAL_WINDOWS.md) にあります。
+
 ## API の使い方（Swagger から）
 
 `/api/v1/stages` と `/api/v1/health` 以外のすべての API に `X-Actor-Id` ヘッダが必要です（閲覧を含む）。操作者は組織に所属する人間で、ロール（admin / reviewer / member / viewer）に応じた操作だけができます（[Architecture](docs/architecture.md) の「組織とロール」）。シードされた人間 actor `00000000-0000-7000-8000-000000000001` は既定組織の admin です。
