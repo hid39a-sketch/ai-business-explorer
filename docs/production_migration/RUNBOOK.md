@@ -2,6 +2,7 @@
 
 - 対象：`hid39a-sketch/ai-business-explorer` の PR #13（head `95bdf30`、main から15コミット）
 - 状態：**準備のみ**。本番DBには一度も接続していない。各工程は承認後に実施する。
+- クラウド上の本番DBはまだない。運用しているのは各自の PC の Docker の DB で、その移行（0001 → 0009）は[LOCAL_WINDOWS.md](LOCAL_WINDOWS.md) の手順で実施した（2026-10-02）。
 - 同じフォルダの SQL 01〜04 はすべて `BEGIN TRANSACTION READ ONLY … ROLLBACK` で、データを変えない。
   一時DBで次の流れを再現し、SQL がすべて正しく動くことを確かめた：main のコードで作った DB → 0009 → PR #13 の seed → 切替 → Fake のスモーク。
 
@@ -30,7 +31,7 @@ P="psql $PSQL_URL -v ON_ERROR_STOP=1"
 | 3 | ワーカー（`python -m ai_business_explorer.worker`）を止め、API を止めるか書き込みを止める | 移行中に新しい実行と LLM 呼び出しが起きないようにする | ワーカーのプロセスがない | 止められない |
 | 4 | `pg_dump -Fc "$PSQL_URL" -f ave_before_0009_$(date +%Y%m%d%H%M).dump`、続けて `pg_restore -l <dump> > /dev/null` | 戻すためのバックアップ | どちらも終了コード 0 | どちらかが失敗 |
 | 5 | `$P -f 01_precheck.sql` | 今の状態を確かめる | 下の「工程 6」の条件を満たす | SQL がエラー |
-| 6 | 工程 5 の結果を読む | 0009 を適用してよいか判断する | alembic_version＝`0008`、request_params 列なし（0行）、queued/running の実行が0行。件数を控える | `0008` 以外（`0009` ならすでに適用済みなので、工程 8 に飛ぶか調べる）、列がすでにある、実行中がある |
+| 6 | 工程 5 の結果を読む | 0009 を適用してよいか判断する | alembic_version＝`0008`、request_params 列なし（0行）、queued/running の実行が0行。件数を控える | `0008` 以外（`0009` ならすでに適用済みなので、工程 8 に飛ぶか調べる。`0008` より古いなら [LOCAL_WINDOWS.md](LOCAL_WINDOWS.md) の手順で head まで上げる）、列がすでにある、実行中がある |
 | 7 | `uv run alembic upgrade 0008:0009 --sql` で SQL を確かめてから、`PGOPTIONS='-c lock_timeout=5s' uv run alembic upgrade 0009`（PR #13 のコードで実行） | `llm_calls.request_params`（JSONB、nullable）を追加する | `Running upgrade 0008 -> 0009` | --sql の結果が ALTER 1文と版の更新以外を含む／lock timeout（時間をおいてやり直す）／その他のエラー |
 | 8 | `$P -f 01_precheck.sql`。続けて PR #13 のコードを配備する（ワーカーはまだ止めておく） | 適用を確かめる | alembic_version＝`0009`、列が jsonb で nullable、件数が工程 6 と同じ | どれかが違う |
 | 9 | 単価を入れる（下の「単価の投入」の方法 A か B） | 4モデルの単価を登録する | コマンドが成功 | エラー |
