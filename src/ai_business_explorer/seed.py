@@ -177,7 +177,9 @@ def _create_employee(session: Session, registry: AgentRegistry, spec: dict[str, 
         llm_config={"provider": FAKE_PROVIDER, "model": FAKE_MODEL},
         allowed_tools=[],
         input_format=agent.input_model.model_json_schema(),
-        output_format=agent.contract_for(spec["prompt_version"]).output_model.model_json_schema(),
+        output_format=agent.contract_for(
+            spec["prompt_key"], spec["prompt_version"]
+        ).output_model.model_json_schema(),
         status=AIEmployeeStatus.ACTIVE.value,
         version=1,
     )

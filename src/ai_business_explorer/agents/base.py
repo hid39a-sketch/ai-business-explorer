@@ -196,21 +196,39 @@ class Agent(ABC):
     output_schema_version: ClassVar[str]
     input_model: ClassVar[type[BaseModel]]
     output_model: ClassVar[type[BaseModel]]
-    # Prompt の版 → 出力契約（17章）。空でなければ、ここにない Prompt の版は使えない
-    output_contracts: ClassVar[Mapping[str, OutputContract]] = MappingProxyType({})
+    # （prompt_key, prompt_version）→ 出力契約（第2回仕様 17章）。空でなければ、
+    # prompt_key は実装と一致していなければならず、表にない組み合わせは使えない
+    output_contracts: ClassVar[Mapping[tuple[str, str], OutputContract]] = MappingProxyType({})
+    # 経過措置（17章 C1）：実装と prompt_key が一致しない既存の AI社員に使う契約（v1）。
+    # 不一致の構成を正式に許すものではない（新規作成・不一致にする更新は 422）
+    legacy_mismatch_contract: ClassVar[OutputContract | None] = None
 
     @classmethod
-    def contract_for(cls, prompt_version: str) -> OutputContract:
-        """Prompt の版から出力契約を一意に決める（17章）。対応がなければ DomainValidationError。"""
+    def requires_matching_prompt_key(cls) -> bool:
+        """prompt_key が実装と一致していなければならないか（出力契約の表を持つ実装）。"""
+        return bool(cls.output_contracts)
+
+    @classmethod
+    def contract_for(cls, prompt_key: str, prompt_version: str) -> OutputContract:
+        """（prompt_key, prompt_version）から出力契約を一意に決める（17章）。
+
+        - 表にある組み合わせ：その契約。
+        - 実装と prompt_key が一致しない（既存の AI社員だけがありうる）：経過措置の v1 契約。
+          v2 契約には切り替えない。
+        - prompt_key が一致して表にない版：DomainValidationError。
+        """
         if not cls.output_contracts:
             return OutputContract(cls.output_schema_version, cls.output_model)
-        contract = cls.output_contracts.get(prompt_version)
-        if contract is None:
-            raise DomainValidationError(
-                f"no output contract for {cls.implementation_key} prompt {prompt_version} "
-                f"(supported: {', '.join(sorted(cls.output_contracts))})"
-            )
-        return contract
+        contract = cls.output_contracts.get((prompt_key, prompt_version))
+        if contract is not None:
+            return contract
+        if prompt_key != cls.implementation_key and cls.legacy_mismatch_contract is not None:
+            return cls.legacy_mismatch_contract
+        supported = ", ".join(f"{k}/{v}" for k, v in sorted(cls.output_contracts))
+        raise DomainValidationError(
+            f"no output contract for {cls.implementation_key} prompt {prompt_key}/{prompt_version} "
+            f"(supported: {supported})"
+        )
 
     @abstractmethod
     def run(self, ctx: AgentContext) -> AnalysisDraft: ...

@@ -7,13 +7,14 @@
 
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ai_business_explorer.domain.enums import PricingKind
-from ai_business_explorer.infrastructure.db.models import Pricing, StageRun
+from ai_business_explorer.infrastructure.db.models import AIEmployee, Pricing, StageRun
 from ai_business_explorer.llm import factory
 from ai_business_explorer.seed import FAKE_PRICING_EFFECTIVE_FROM
 from tests.conftest import Api
@@ -51,9 +52,9 @@ def _pricing(session: Session) -> None:
 SEED_PROMPT_VERSIONS = {"idea_generation": "v2", "market_research": "v4"}
 
 
-def _employee(api: Api, key: str, stage_key: str = "idea_generation", **fields: Any) -> Any:
+def _payload(key: str, stage_key: str = "idea_generation", **fields: Any) -> dict[str, Any]:
     implementation = "idea_generator" if stage_key == "idea_generation" else "market_researcher"
-    body = {
+    return {
         "key": key,
         "name": key,
         "role": "副担当",
@@ -65,7 +66,10 @@ def _employee(api: Api, key: str, stage_key: str = "idea_generation", **fields: 
         "llm_config": {"provider": "fake", "model": "fake-model-v1"},
         **fields,
     }
-    return api.post("/ai-employees", body)
+
+
+def _employee(api: Api, key: str, stage_key: str = "idea_generation", **fields: Any) -> Any:
+    return api.post("/ai-employees", _payload(key, stage_key, **fields))
 
 
 def _assign(api: Api, employee: Any, role: str = "secondary", expect: int = 201) -> Any:
@@ -100,13 +104,31 @@ def test_same_configuration_is_rejected_on_assignment(api: Api) -> None:
     [
         ("provider", {"llm_config": {"provider": "anthropic", "model": "fake-model-v1"}}),
         ("model", {"llm_config": {"provider": "fake", "model": "fake-model-other"}}),
-        ("prompt key", {"prompt_key": "market_researcher"}),
     ],
 )
 def test_any_difference_is_allowed_on_assignment(
     api: Api, label: str, fields: dict[str, Any]
 ) -> None:
     _assign(api, _employee(api, "ig_" + label.replace(" ", "_"), **fields))
+
+
+def test_prompt_key_difference_is_allowed_on_assignment(api: Api, session: Session) -> None:
+    """Prompt の key だけが違えば別の構成（V-08。判定は変えていない）。
+
+    実装と prompt_key が一致しない構成は、API では新しく作れない（第2回仕様 17章 C1。422）。
+    そのため、この組み合わせは既存のデータ（経過措置の対象）として DB で直接作って確かめる。
+    """
+    api.post(
+        "/ai-employees",
+        {**_payload("ig_prompt_key"), "prompt_key": "market_researcher"},
+        expect=422,
+    )
+    employee = _employee(api, "ig_prompt_key")
+    row = session.get(AIEmployee, UUID(employee["id"]))
+    assert row is not None
+    row.prompt_key = "market_researcher"
+    session.commit()
+    _assign(api, employee)
 
 
 def test_different_prompt_version_is_allowed(api: Api) -> None:

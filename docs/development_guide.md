@@ -58,7 +58,7 @@ curl -X PATCH http://localhost:8000/api/v1/ai-employees/<market_researcher の i
   -d '{"prompt_version": "v4"}'
 ```
 
-Prompt の版で、出力契約（出力モデルと分析の `schema_version`）が決まります（第2回仕様 17章）。対応は各 AI社員の実装の `output_contracts` にあり、`Agent.contract_for` で引きます。
+Prompt の key と版（`prompt_key`, `prompt_version`）で、出力契約（出力モデルと分析の `schema_version`）が決まります（第2回仕様 17章）。対応は各 AI社員の実装の `output_contracts` にあり、`Agent.contract_for(prompt_key, prompt_version)` で引きます。
 
 | 実装 | Prompt の版 | 出力契約 | schema_version |
 |---|---|---|---|
@@ -69,6 +69,8 @@ Prompt の版で、出力契約（出力モデルと分析の `schema_version`�
 
 - 新しい seed は idea_generator v2・market_researcher v4 で作ります。v1 の Prompt・出力モデルは変えていないので、切り替えなければ既存の AI社員の挙動は変わりません。
 - Prompt のファイル（`prompts/<key>/<version>.md`）がない版、または出力契約のない版は 422 で拒否されます。
+- 実装と `prompt_key` が一致しない AI社員は、新しく作れません（422）。実装・`prompt_key`・`prompt_version` を変えて不一致になる更新も 422 です（第2回仕様 17章 C1）。
+- この規則の前からある不一致の AI社員は、自動では移行しません。経過措置として v1 契約で実行でき、v2 契約には切り替わりません。一致させる更新（例：`prompt_key` を実装と同じにする）は通ります。不一致の構成を正式に許すものではありません。
 - AI社員の版（`version`）が1つ上がり、変更前後が監査ログに残ります。過去の実行は、実行ごとに記録した `prompt_version` と `prompt_hash` で追跡できます。
 - LLM に送る出力スキーマは実行のたびにコードから作るので（`output_schema_for`）、AI社員に保存されている `output_format` が古くても、実行には影響しません。`output_format` は作成時の記録で、自動では作り直されません。
 

@@ -53,19 +53,22 @@ class MarketResearcher(Agent):
     output_schema_version = "market_research.v1"
     input_model = MarketResearcherInput
     output_model = MarketResearcherOutput
-    output_contracts: ClassVar[Mapping[str, OutputContract]] = MappingProxyType(
+    output_contracts: ClassVar[Mapping[tuple[str, str], OutputContract]] = MappingProxyType(
         {
-            "v1": _V1,
-            "v2": _V1,
-            "v3": _V1,
-            "v4": OutputContract("market_research.v2", MarketResearcherOutputV2),
+            ("market_researcher", "v1"): _V1,
+            ("market_researcher", "v2"): _V1,
+            ("market_researcher", "v3"): _V1,
+            ("market_researcher", "v4"): OutputContract(
+                "market_research.v2", MarketResearcherOutputV2
+            ),
         }
     )
+    legacy_mismatch_contract = _V1
 
     def run(self, ctx: AgentContext) -> AnalysisDraft:
         if ctx.idea is None:
             raise AgentOutputError("market_research requires an idea")
-        output_model = self.contract_for(ctx.prompt.version).output_model
+        output_model = self.contract_for(ctx.prompt.key, ctx.prompt.version).output_model
         payload = MarketResearcherInput(
             idea=ctx.idea,
             evidence=list(ctx.evidence),

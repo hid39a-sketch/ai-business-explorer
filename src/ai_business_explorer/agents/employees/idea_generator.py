@@ -42,21 +42,25 @@ class IdeaGeneratorOutputV2(BaseModel):
     claims: list[Claim] = Field(default_factory=list, max_length=10)
 
 
+_V1 = OutputContract("idea_generation.v1", IdeaGeneratorOutput)
+
+
 class IdeaGenerator(Agent):
     implementation_key = "idea_generator"
     stage_key = IDEA_GENERATION
     output_schema_version = "idea_generation.v1"
     input_model = IdeaGeneratorInput
     output_model = IdeaGeneratorOutput
-    output_contracts: ClassVar[Mapping[str, OutputContract]] = MappingProxyType(
+    output_contracts: ClassVar[Mapping[tuple[str, str], OutputContract]] = MappingProxyType(
         {
-            "v1": OutputContract("idea_generation.v1", IdeaGeneratorOutput),
-            "v2": OutputContract("idea_generation.v2", IdeaGeneratorOutputV2),
+            ("idea_generator", "v1"): _V1,
+            ("idea_generator", "v2"): OutputContract("idea_generation.v2", IdeaGeneratorOutputV2),
         }
     )
+    legacy_mismatch_contract = _V1
 
     def run(self, ctx: AgentContext) -> AnalysisDraft:
-        output_model = self.contract_for(ctx.prompt.version).output_model
+        output_model = self.contract_for(ctx.prompt.key, ctx.prompt.version).output_model
         payload = IdeaGeneratorInput(
             exploration=ctx.exploration, research_question=ctx.research_question
         )

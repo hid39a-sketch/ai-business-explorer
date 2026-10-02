@@ -58,7 +58,7 @@ class AIEmployeeService:
             status=cmd.status.value,
             version=1,
         )
-        self._validate_and_fill(employee)
+        self._validate_and_fill(employee, prompt_changed=True)
         # 解決後の（provider, model）に有効な単価がなければ登録しない（10章 SC候補-12。422）
         ensure_llm_pricing(self.session, *resolve_llm_config(employee.llm_config, default_provider))
         self.employees.add(employee)
@@ -94,6 +94,7 @@ class AIEmployeeService:
         employee = self.employees.get_or_raise(employee_id)
         before = snapshot(employee, AUDIT_FIELDS)
         resolved_before = resolve_llm_config(employee.llm_config, default_provider)
+        prompt_before = _prompt_fields(employee)
         changes = cmd.model_dump(exclude_unset=True, mode="json")
         if not changes:
             return employee
@@ -101,7 +102,7 @@ class AIEmployeeService:
             setattr(employee, field, value)  # llm_config は dict として格納される
         if cmd.status is not None:
             employee.status = cmd.status.value
-        self._validate_and_fill(employee)
+        self._validate_and_fill(employee, prompt_changed=_prompt_fields(employee) != prompt_before)
         # provider か model が変わる更新だけ、単価を確かめる（10章 SC候補-12。422）
         resolved_after = resolve_llm_config(employee.llm_config, default_provider)
         if resolved_after != resolved_before:
@@ -122,7 +123,11 @@ class AIEmployeeService:
         self.session.commit()
         return employee
 
-    def _validate_and_fill(self, employee: AIEmployee) -> None:
+    def _validate_and_fill(self, employee: AIEmployee, *, prompt_changed: bool) -> None:
+        """prompt_changed：実装・prompt_key・prompt_version のどれかを設定・変更するか。
+
+        作成では常に真。
+        """
         stage = get_stage(employee.stage_key)
         if not stage.executable_by_ai:
             raise DomainValidationError(
@@ -154,9 +159,24 @@ class AIEmployeeService:
             raise DomainValidationError(
                 "an implemented AI employee requires prompt_key/prompt_version"
             )
-        # Prompt の版に対応する出力契約がなければ使えない（第2回仕様 17章。422）
-        contract = agent.contract_for(employee.prompt_version)
+        # 実装と prompt_key が一致しない構成は、新しく作れない（第2回仕様 17章 C1。422）。
+        # 既存の不一致の AI社員は、実装・Prompt を変えない更新なら通す（経過措置。v1 契約で動く）
+        if (
+            prompt_changed
+            and agent.requires_matching_prompt_key()
+            and employee.prompt_key != agent.implementation_key
+        ):
+            raise DomainValidationError(
+                f"prompt_key '{employee.prompt_key}' does not match implementation "
+                f"'{agent.implementation_key}'"
+            )
+        # （prompt_key, prompt_version）に対応する出力契約がなければ使えない（17章。422）
+        contract = agent.contract_for(employee.prompt_key, employee.prompt_version)
         if employee.input_format is None:
             employee.input_format = agent.input_model.model_json_schema()
         if employee.output_format is None:
             employee.output_format = contract.output_model.model_json_schema()
+
+
+def _prompt_fields(employee: AIEmployee) -> tuple[str | None, str | None, str | None]:
+    return (employee.implementation_key, employee.prompt_key, employee.prompt_version)

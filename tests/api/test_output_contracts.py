@@ -152,5 +152,5 @@ def test_prompt_version_without_contract_is_rejected(
         f"/api/v1/ai-employees/{employee['id']}", json={"prompt_version": "v9"}, headers=api.h
     )
     assert res.status_code == 422
-    assert "no output contract for idea_generator prompt v9" in res.json()["detail"]
+    assert "no output contract for idea_generator prompt idea_generator/v9" in res.json()["detail"]
     assert _employee(api, "idea_generator")["prompt_version"] == "v2"
