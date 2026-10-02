@@ -122,6 +122,7 @@ URL を指定して公開 Web ページを取得する `web_fetch`（external_re
 - 単価は `pricing`（LLM はプロバイダー × モデル、Tool は名前。組織共通）。単価の変更は新しい行で行い、履歴を残す。呼び出しの時点の単価で費用を計算し、使った単価の ID を記録する。Fake LLM の単価（0 USD）は seed が登録する。
 - 費用は LLM・Tool を呼ぶたびに `llm_calls` / `tool_calls` に記録してすぐ確定し、`executions.cost_amount` に加算する。取り消し・失敗・タイムアウトで終わった実行の費用も残り、予算に計上する（E-07）。通貨はプロバイダーの請求通貨のまま（R-21）。
 - 予算は月単位（UTC の暦月）。組織全体（`budgets` に行がなければ設定の既定値：月額 100 USD、hard）と、探索案件ごと（任意）。hard は超えたら止める、soft は止めない。
+- LLM の単価は seed で登録する（`claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-4-5`、`claude-haiku-4-5-20251001`。公式にある ID だけ）。AI社員の作成、provider か model が変わる更新、割り当ての作成で、解決後の（provider, model）に有効な単価がなければ 422。起動時に単価がなければ 409 で、API は呼ばない（第2回仕様 10章 SC候補-12）。model を省略したときの既定（`llm/factory.py` の `DEFAULT_MODELS`）は、anthropic が `claude-opus-5-5`、fake が `fake-model-v1`。
 - 1実行あたりの上限は AI社員の `llm_config`（`max_cost_per_execution`、`max_llm_calls`、`max_tool_calls`、`max_tokens`）。未指定なら設定の既定値（1 USD、各20回）。受け付けた時点の費用上限を `executions.cost_limit` に残す。
 - 起動時：各 AI社員の LLM に単価がない、単価の通貨が予算と違う場合は 409。残りの予算（上限 − 当月の費用 − 待機中・実行中の実行の確保分）が新しい実行の上限の合計より少なければ 409（`budget_exceeded`）。
 - 実行中：LLM・Tool を呼ぶ前に、回数・費用の上限と当月の予算を確認し、超えていれば以降を止めて `failed`（`budget_exceeded`）。呼び出しの後に費用の上限を超えた場合も `failed` にする（その呼び出しの費用は記録する）。

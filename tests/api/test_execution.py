@@ -1,6 +1,7 @@
 """ステージ実行と実行履歴（成功・失敗）、バージョン追跡。"""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -11,6 +12,7 @@ from ai_business_explorer.application.stage_runs import StageRunService
 from ai_business_explorer.config import Settings
 from ai_business_explorer.infrastructure.db.models import (
     Actor,
+    AIEmployee,
     Analysis,
     AuditEvent,
     Idea,
@@ -100,8 +102,19 @@ def test_archived_exploration_cannot_run(api: Api) -> None:
 def test_unavailable_llm_provider_records_failed_execution(api: Api, session: Session) -> None:
     exp = api.exploration()
     ig = next(e for e in api.items("/ai-employees") if e["key"] == "idea_generator")
-    api.patch(f"/ai-employees/{ig['id']}", {"llm_config": {"provider": "openai", "model": "x"}})
-    # 単価のない LLM は費用を予算に計上できないので、起動しない（第2回仕様 10章）
+    # 単価のないモデルには、AI社員の更新で切り替えられない（第2回仕様 10章 SC候補-12。422）
+    api.patch(
+        f"/ai-employees/{ig['id']}",
+        {"llm_config": {"provider": "openai", "model": "x"}},
+        expect=422,
+    )
+    # この確認の前から単価のないモデルを使っている AI社員（既存のデータ）を、DB で直接作る
+    employee = session.get(AIEmployee, UUID(ig["id"]))
+    assert employee is not None
+    employee.llm_config = {"provider": "openai", "model": "x"}
+    employee.version += 1
+    session.commit()
+    # 単価のない LLM は費用を予算に計上できないので、起動しない（第2回仕様 10章。409 は変えない）
     api.post(f"/explorations/{exp['id']}/stage-runs", {}, expect=409)
     session.add(
         Pricing(

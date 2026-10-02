@@ -5,17 +5,46 @@
 （DomainValidationError）。実際の LLM には接続しない。
 """
 
+from decimal import Decimal
 from typing import Any
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ai_business_explorer.infrastructure.db.models import StageRun
+from ai_business_explorer.domain.enums import PricingKind
+from ai_business_explorer.infrastructure.db.models import Pricing, StageRun
 from ai_business_explorer.llm import factory
+from ai_business_explorer.seed import FAKE_PRICING_EFFECTIVE_FROM
 from tests.conftest import Api
 
 SAME = "has the same implementation, prompt and model as the primary"
+
+# このモジュールで使うモデル。AI社員の作成・更新・割り当てには単価が要る（第2回仕様 10章 SC候補-12）
+PRICED_MODELS = [
+    ("fake", "fake-model-other"),
+    ("fake", "fake-model-b"),
+    ("fake", "fake-model-next"),
+    ("anthropic", "fake-model-v1"),
+]
+
+
+@pytest.fixture(autouse=True)
+def _pricing(session: Session) -> None:
+    for provider, model in PRICED_MODELS:
+        session.add(
+            Pricing(
+                kind=PricingKind.LLM.value,
+                provider=provider,
+                model=model,
+                input_per_million_tokens=Decimal(0),
+                output_per_million_tokens=Decimal(0),
+                per_call=Decimal(0),
+                currency="USD",
+                effective_from=FAKE_PRICING_EFFECTIVE_FROM,
+            )
+        )
+    session.commit()
 
 
 # seed の primary の Prompt の版（出力契約 v2。第2回仕様 17章）

@@ -12,11 +12,13 @@ from ai_business_explorer.application.common import (
     require_human,
     snapshot,
 )
+from ai_business_explorer.application.costs import ensure_llm_pricing
 from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
 from ai_business_explorer.domain.stages import get_stage
 from ai_business_explorer.infrastructure.db.models import Actor, AIEmployee
 from ai_business_explorer.infrastructure.db.repositories import AIEmployeeRepository
+from ai_business_explorer.llm.factory import resolve_llm_config
 from ai_business_explorer.prompts.loader import prompt_exists
 
 AUDIT_FIELDS = [
@@ -44,7 +46,7 @@ class AIEmployeeService:
         self.employees = AIEmployeeRepository(session)
         self.agent_registry = agent_registry
 
-    def create(self, actor: Actor, cmd: AIEmployeeCreate) -> AIEmployee:
+    def create(self, actor: Actor, cmd: AIEmployeeCreate, default_provider: str) -> AIEmployee:
         require_human(actor, "register AI employees")
         organization_id = current_organization_id(self.session)
         if self.employees.get_by_key(organization_id, cmd.key) is not None:
@@ -57,6 +59,8 @@ class AIEmployeeService:
             version=1,
         )
         self._validate_and_fill(employee)
+        # 解決後の（provider, model）に有効な単価がなければ登録しない（10章 SC候補-12。422）
+        ensure_llm_pricing(self.session, *resolve_llm_config(employee.llm_config, default_provider))
         self.employees.add(employee)
         record_audit(
             self.session,
@@ -83,10 +87,13 @@ class AIEmployeeService:
             page=page,
         )
 
-    def update(self, actor: Actor, employee_id: UUID, cmd: AIEmployeeUpdate) -> AIEmployee:
+    def update(
+        self, actor: Actor, employee_id: UUID, cmd: AIEmployeeUpdate, default_provider: str
+    ) -> AIEmployee:
         require_human(actor, "update AI employees")
         employee = self.employees.get_or_raise(employee_id)
         before = snapshot(employee, AUDIT_FIELDS)
+        resolved_before = resolve_llm_config(employee.llm_config, default_provider)
         changes = cmd.model_dump(exclude_unset=True, mode="json")
         if not changes:
             return employee
@@ -95,6 +102,10 @@ class AIEmployeeService:
         if cmd.status is not None:
             employee.status = cmd.status.value
         self._validate_and_fill(employee)
+        # provider か model が変わる更新だけ、単価を確かめる（10章 SC候補-12。422）
+        resolved_after = resolve_llm_config(employee.llm_config, default_provider)
+        if resolved_after != resolved_before:
+            ensure_llm_pricing(self.session, *resolved_after)
         # 定義が変わるたびにバージョンを上げる。
         # 過去の実行は executions のスナップショットで追跡できる。
         employee.version += 1

@@ -132,6 +132,15 @@ def find_pricing(
     return session.scalars(stmt).first()
 
 
+def ensure_llm_pricing(session: Session, provider: str, model: str) -> None:
+    """今有効な LLM の単価があることを確かめる（第2回仕様 10章 SC候補-12）。なければ 422。
+
+    AI社員の作成・provider か model が変わる更新・割り当ての作成で使う。起動時の確認（409）は別。
+    """
+    if find_pricing(session, PricingKind.LLM, provider, model, utcnow()) is None:
+        raise DomainValidationError(f"no pricing for LLM {provider}/{model}")
+
+
 @dataclass(frozen=True)
 class ExecutionLimits:
     """1回の実行ごとの上限（AI社員の llm_config。未指定なら設定の既定値）。"""

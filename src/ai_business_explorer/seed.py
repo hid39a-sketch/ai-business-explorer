@@ -134,8 +134,12 @@ def seed(session: Session) -> None:
 # LLM の単価（USD / 100万トークン）。単価が変わったら新しい行（適用開始日時）を足す
 SEED_LLM_PRICING = [
     (FAKE_PROVIDER, FAKE_MODEL, Decimal(0), Decimal(0)),
-    # Anthropic の公開価格（2026-09 時点）。thinking のトークンは出力として課金される
-    (CLAUDE_PROVIDER, CLAUDE_DEFAULT_MODEL, Decimal(4), Decimal(20)),
+    # Anthropic の公開価格（2026-09 時点）。thinking のトークンは出力として課金される。
+    # 公式にある別名と日付付き ID を登録し、架空の ID は作らない（第2回仕様 10章 SC候補-12）
+    (CLAUDE_PROVIDER, CLAUDE_DEFAULT_MODEL, Decimal(4), Decimal(20)),  # claude-opus-5-5
+    (CLAUDE_PROVIDER, "claude-sonnet-5-5", Decimal(2), Decimal(10)),
+    (CLAUDE_PROVIDER, "claude-haiku-4-5", Decimal(1), Decimal(5)),
+    (CLAUDE_PROVIDER, "claude-haiku-4-5-20251001", Decimal(1), Decimal(5)),
 ]
 
 

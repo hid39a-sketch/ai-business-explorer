@@ -20,6 +20,7 @@ from ai_business_explorer.application.common import (
     require_human,
     snapshot,
 )
+from ai_business_explorer.application.costs import ensure_llm_pricing
 from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.domain.enums import StageAssignmentRole
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
@@ -84,6 +85,8 @@ class StageAssignmentService:
         employee = self.employees.get_or_raise(cmd.ai_employee_id)
         if employee.stage_key != stage.key:
             raise DomainValidationError("ai_employee is not for this stage")
+        # 担当の AI社員の解決後の（provider, model）に有効な単価がなければ割り当てない（SC候補-12）
+        ensure_llm_pricing(self.session, *resolve_llm_config(employee.llm_config, default_provider))
         self._ensure_not_same_as_counterpart(employee, stage.key, cmd.role, default_provider)
         assignment = StageAssignment(
             organization_id=current_organization_id(self.session),
