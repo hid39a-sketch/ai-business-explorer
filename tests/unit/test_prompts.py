@@ -51,8 +51,37 @@ def test_market_researcher_v2_defines_relation_against_the_claim() -> None:
         assert phrase in prompt.text, phrase
 
 
-def test_seed_uses_market_researcher_v2() -> None:
+# market_researcher の v2 の内容（v3 の追加後も変更しない）
+MARKET_RESEARCHER_V2_SHA256 = "77a776cfd2c694dbdd1c2538cb566f00a7cb7798ed72e14a8403afb81664c04b"
+
+
+def test_market_researcher_v2_is_unchanged() -> None:
+    assert load_prompt("market_researcher", "v2").sha256 == MARKET_RESEARCHER_V2_SHA256
+
+
+def test_market_researcher_v3_keeps_v2_and_adds_review_handling() -> None:
+    """v3 は v2 の制約（relation の意味）を含み、前段の分析のレビュー情報の扱いを足す（V-07）。"""
+    v2 = load_prompt("market_researcher", "v2").text
+    v3 = load_prompt("market_researcher", "v3").text
+    for line in v2.splitlines():
+        if line.startswith("入力は JSON"):
+            continue
+        assert line in v3, line
+    for phrase in (
+        "review_status",
+        "latest_review",
+        "decision・comment・corrections",
+        "過去のレビューではありません",
+        "レビューは人間の判断であり、Evidence ではありません",
+        '"rejected" の分析の内容を、事実や前提として扱わないでください',
+        "comment の指摘を考慮し",
+        "corrections がある場合は、必要に応じてその訂正を反映してください",
+    ):
+        assert phrase in v3, phrase
+
+
+def test_seed_uses_market_researcher_v3() -> None:
     from ai_business_explorer.seed import SEED_EMPLOYEES
 
     versions = {e["key"]: e["prompt_version"] for e in SEED_EMPLOYEES}
-    assert versions == {"idea_generator": "v1", "market_researcher": "v2"}
+    assert versions == {"idea_generator": "v1", "market_researcher": "v3"}

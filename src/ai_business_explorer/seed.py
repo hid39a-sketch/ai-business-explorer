@@ -74,9 +74,10 @@ SEED_EMPLOYEES = [
         "stage_key": "market_research",
         "implementation_key": "market_researcher",
         "prompt_key": "market_researcher",
-        # v2：relation の意味（主張の内容と Evidence の関係）を明記した版。v1 は変更しない。
+        # v3：v2（relation の意味）に、前段の分析のレビュー情報の扱い（V-07）を加えた版。
+        # v1・v2 は変更しない。
         # seed は AI社員がないときだけ作るので、既存の DB の AI社員は書き換えない
-        "prompt_version": "v2",
+        "prompt_version": "v3",
     },
 ]
 

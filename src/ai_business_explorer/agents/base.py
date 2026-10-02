@@ -49,10 +49,23 @@ class EvidenceView(_Frozen):
     summary: str | None
 
 
+class ReviewView(_Frozen):
+    """分析全体の最新の Human Review。人間の判断で、Evidence ではない（根拠として引用できない）。"""
+
+    decision: str
+    comment: str | None
+    corrections: dict[str, Any] | None
+
+
 class AnalysisView(_Frozen):
     id: UUID
     stage_key: str
     summary: str
+    # 実行を始めた時点の人間のレビューの状態（V-07。値は ReviewStatus）
+    review_status: str
+    # 分析全体（claim_id なし）の最新のレビュー。review_status はこのレビューで決まっている。
+    # レビューがなければ None（review_status は pending_review）
+    latest_review: ReviewView | None = None
 
 
 # 主張と Evidence の関係（第2回仕様 D-15・C-09）。docstring は出力スキーマの description として

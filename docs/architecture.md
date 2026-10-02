@@ -58,7 +58,7 @@ PostgreSQL 16
 3. 担当を決める。primary は、人間が指定した `ai_employee_id` → `stage_assignments` の primary → 有効な社員が1人だけならその社員、の順。secondary は人間が `secondary_ai_employee_ids` で選んだ社員で、そのステージに secondary として割り当てられている必要がある。
 4. `stage_runs` と `executions`（primary と secondary それぞれ1件）を `queued` で作成してコミットし、**202** を返す。再実行・差し戻しの場合は、対象ステージ以降の最新試行に `superseded_at` を記録する。
 5. ワーカー（`make worker`）が最も古い `queued` を1つ取り出し（`FOR UPDATE SKIP LOCKED`）、`running` にして実行する。実行中は別のセッションで `heartbeat_at` を更新する。`EXECUTION_MODE=sync`（テストと Fake LLM 用）では、応答の前に同じ処理で実行する。
-6. AI に渡す入力を、実行を始めた時点で決める。Evidence は active のものだけ（superseded・retracted・purged は渡さない）。前段の分析は、成功した最新の試行の **primary** のものだけ。渡した ID と状態は `stage_runs.input_snapshot` に残す。
+6. AI に渡す入力を、実行を始めた時点で決める。Evidence は active のものだけ（superseded・retracted・purged は渡さない）。前段の分析は、成功した最新の試行の **primary** のものだけで、レビューの状態に関係なく渡す（reject されたものも除外しない）。前段の分析には、その時点のレビューの状態（`review_status`）と、分析全体（claim_id なし）の最新のレビュー1件（decision・comment・corrections）を付ける（V-07）。渡した ID と状態（Evidence の状態、分析のレビューの状態と最新のレビューの ID）は `stage_runs.input_snapshot` に残し、後でレビューが変わっても書き換えない。
 7. primary を先に、続いて secondary を実行する。`AgentContext`（読み取り専用の入力、LLM、ToolBox、Prompt）を組み立てて AI社員を実行する。
 8. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、relation の規則（relation は必須、重複なし、supports と contradicts の同時指定なし、`evidence_based` は supports か contradicts が必須）を守っているか、Idea 候補を出せるのは idea_generation だけか。構造化出力のスキーマ（下の「実際の LLM」）で形を保証したうえで、スキーマで表せない規則をここで確かめる。
 9. 成功した場合：`analyses`、`claims`、`claim_evidence_links`、（idea_generation の primary なら）`candidate` の Idea を1トランザクションで保存する。secondary の出力からは Idea を作らない。第1回の `analysis_evidence_links` には書き込まない（凍結済み）。

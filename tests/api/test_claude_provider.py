@@ -241,10 +241,10 @@ def test_market_research_requests_structured_output_limited_to_input_evidence(
     enum = fmt["schema"]["$defs"]["EvidenceRef"]["properties"]["evidence_id"]["enum"]
     assert sorted(enum) == sorted([ev1, ev2])
     assert fmt["schema"]["$defs"]["EvidenceRef"]["required"] == ["evidence_id", "relation"]
-    # プロンプトは v2（版とハッシュを実行に記録する）
-    v2 = load_prompt("market_researcher", "v2")
-    assert (execution.prompt_version, execution.prompt_hash) == ("v2", v2.sha256)
-    assert sdk.requests[0]["system"] == v2.text
+    # プロンプトは seed の v3（版とハッシュを実行に記録する）
+    v3 = load_prompt("market_researcher", "v3")
+    assert (execution.prompt_version, execution.prompt_hash) == ("v3", v3.sha256)
+    assert sdk.requests[0]["system"] == v3.text
     # relation は主張と Evidence の組ごとに保存する（contradicts だけの evidence_based も可）
     links = session.execute(
         select(ClaimModel.claim_key, ClaimEvidenceLink.evidence_id, ClaimEvidenceLink.relation)

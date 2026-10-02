@@ -35,6 +35,7 @@ from ai_business_explorer.agents.base import (
     EvidenceView,
     ExplorationView,
     IdeaView,
+    ReviewView,
 )
 from ai_business_explorer.agents.base import (
     Claim as AgentClaim,
@@ -104,6 +105,7 @@ from ai_business_explorer.infrastructure.db.models import (
     EvidenceCandidateAINote,
     Execution,
     Exploration,
+    HumanReview,
     Idea,
     StageAssignment,
     StageRun,
@@ -116,6 +118,7 @@ from ai_business_explorer.infrastructure.db.repositories import (
     EvidenceRepository,
     ExecutionRepository,
     ExplorationRepository,
+    HumanReviewRepository,
     IdeaRepository,
     StageAssignmentRepository,
     StageRunRepository,
@@ -217,6 +220,7 @@ class StageRunService:
         self.evidence = EvidenceRepository(session)
         self.claims = ClaimRepository(session)
         self.links = ClaimEvidenceLinkRepository(session)
+        self.reviews = HumanReviewRepository(session)
 
     # ------------------------------------------------------------------ 公開操作（人間のみ）
 
@@ -687,6 +691,10 @@ class StageRunService:
         stage = get_stage(stage_run.stage_key)
         evidence = self._evidence_for(exploration, idea)
         prior = self._prior_analyses_for(exploration, idea, stage)
+        # 前段の分析は、この時点のレビューの状態と分析全体の最新のレビューを付けて渡す（V-07）。
+        # 渡した内容は input_snapshot に固定し、後でレビューが変わっても書き換えない
+        reviews = self.reviews.latest_for_analyses([a.id for a in prior])
+        prior_views = [_analysis_view(a, reviews.get(a.id)) for a in prior]
         stage_run.input_snapshot = {
             "evidence_ids": [str(e.id) for e in evidence],
             # 渡した Evidence と、その時点の状態（E-01。入力は active だけ）
@@ -694,6 +702,16 @@ class StageRunService:
                 {"id": str(e.id), "status": EvidenceStatus.ACTIVE.value} for e in evidence
             ],
             "analysis_ids": [str(a.id) for a in prior],
+            # 渡した分析と、その時点のレビューの状態・最新のレビュー（レビューは追記のみ）
+            "analyses": [
+                {
+                    "id": str(a.id),
+                    "review_status": a.review_status,
+                    "review_id": str(reviews[a.id].id) if a.id in reviews else None,
+                    "review_decision": reviews[a.id].decision if a.id in reviews else None,
+                }
+                for a in prior
+            ],
             "research_question": stage_run.research_question,
             # 入力の最も高い分類（第2回仕様 11章）。分析の分類になる
             "classification": self._input_classification(exploration, evidence, prior).value,
@@ -704,7 +722,7 @@ class StageRunService:
         primary_status = RunStatus.FAILED
         for execution in self.executions_for(stage_run.id):
             status = self._execute_one(
-                stage_run, execution, exploration, idea, stage, evidence, prior, deadline
+                stage_run, execution, exploration, idea, stage, evidence, prior_views, deadline
             )
             if execution.assignment_role == StageAssignmentRole.PRIMARY.value:
                 primary_status = status
@@ -718,7 +736,7 @@ class StageRunService:
         idea: Idea | None,
         stage: StageDefinition,
         evidence: list[Evidence],
-        prior: list[Analysis],
+        prior: list[AnalysisView],
         deadline: datetime,
     ) -> RunStatus:
         execution_id = execution.id
@@ -783,9 +801,7 @@ class StageRunService:
                 exploration=ExplorationView.model_validate(exploration, from_attributes=True),
                 idea=IdeaView.model_validate(idea, from_attributes=True) if idea else None,
                 evidence=[EvidenceView.model_validate(e, from_attributes=True) for e in evidence],
-                prior_analyses=[
-                    AnalysisView.model_validate(a, from_attributes=True) for a in prior
-                ],
+                prior_analyses=prior,
                 research_question=stage_run.research_question,
                 llm=llm,
                 llm_model=model,
@@ -1149,3 +1165,22 @@ def _employee_snapshot(employee: AIEmployee) -> dict[str, Any]:
         "version",
     ]
     return {f: to_jsonable(getattr(employee, f)) for f in fields}
+
+
+def _analysis_view(analysis: Analysis, review: HumanReview | None) -> AnalysisView:
+    """後続の AI社員に渡す前段の分析（V-07：レビューの状態と分析全体の最新のレビュー1件）。"""
+    return AnalysisView(
+        id=analysis.id,
+        stage_key=analysis.stage_key,
+        summary=analysis.summary,
+        review_status=analysis.review_status,
+        latest_review=(
+            ReviewView(
+                decision=review.decision,
+                comment=review.comment,
+                corrections=review.corrections,
+            )
+            if review is not None
+            else None
+        ),
+    )

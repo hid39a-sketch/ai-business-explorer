@@ -44,12 +44,12 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 
 ## Prompt の版の切り替え（既存の DB）
 
-seed は AI社員がないときだけ作るので、Prompt の新しい版（例：market_researcher の v2）を seed に入れても、既存の DB の AI社員は書き換わりません。既存の DB で切り替えるときは、admin が API で更新します（migration は使わない）。
+seed は AI社員がないときだけ作るので、Prompt の新しい版（例：market_researcher の v3）を seed に入れても、既存の DB の AI社員は書き換わりません。既存の DB で切り替えるときは、admin が API で更新します（migration は使わない）。
 
 ```bash
 curl -X PATCH http://localhost:8000/api/v1/ai-employees/<market_researcher の id> \
   -H "X-Actor-Id: <admin の actor id>" -H "Content-Type: application/json" \
-  -d '{"prompt_version": "v2"}'
+  -d '{"prompt_version": "v3"}'
 ```
 
 - Prompt のファイル（`prompts/<key>/<version>.md`）がなければ 422 で拒否されます。
