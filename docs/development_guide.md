@@ -38,7 +38,7 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 
 1. GitHub のリポジトリの Settings → Secrets and variables → Actions で、Repository Secret `ANTHROPIC_API_KEY` を登録する（キーはコード・`.env.example`・Issue などに書かない）。
 2. Actions → 「LLM smoke test (manual)」→ Run workflow で、`confirm` に `run` と入力して起動する。
-3. Claude API が1回だけ呼ばれ、モデル・トークン数・費用（上限 0.05 USD）・リクエストIDが表示される。キーは表示されない。
+3. Claude API が2回だけ呼ばれる（通常の呼び出しと、最小の構造化出力 `{"ok": true}`）。それぞれのモデル・トークン数・費用・リクエストIDと、構造化出力の確認結果（`structured_ok`）、合計の費用（上限 0.05 USD）が表示される。キーは表示されない。
 
 ローカルで試す場合は `LLM_SMOKE_CONFIRM=yes LLM_API_KEY=... uv run python -m ai_business_explorer.llm_smoke`（`APP_ENV=test` では動かない）。
 

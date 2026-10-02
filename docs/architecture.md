@@ -96,7 +96,7 @@ PostgreSQL 16
 - データ分類（11章）：送信上限は `LLM_MAX_CLASSIFICATION` で、指定がなければ internal（R-03。契約条件を確認するまで変えない）。restricted はどの LLM にも送らない。
 - API キー（`LLM_API_KEY`、SecretStr）は SDK のクライアントにだけ渡す。環境の他の認証情報（`ANTHROPIC_API_KEY`・ログイン済みのプロファイル）は使わない。キーは LLM ログ・例外のメッセージ・監査ログに入らない。キーが未設定なら anthropic の AI社員は `llm_error` で失敗し、テスト・CI には影響しない。
 - `APP_ENV=test` では実際のプロバイダーを使わない（テストや CI が実 API を呼ばないための安全装置）。テストは Fake LLM と、SDK を差し替えた Fake で行う。
-- 接続確認は手動のワークフロー `.github/workflows/llm-smoke.yml`（`workflow_dispatch`、入力 `confirm` に `run`）だけで行う。Repository Secret `ANTHROPIC_API_KEY` を使って Claude API を1回だけ呼び、費用の上限は 0.05 USD（呼ぶ前に最悪の場合の費用、呼んだ後に実際の費用を確認）、5分で打ち切り、同時に1つだけ。送るのは固定の短い文で、業務データは送らない。
+- 接続確認は手動のワークフロー `.github/workflows/llm-smoke.yml`（`workflow_dispatch`、入力 `confirm` に `run`）だけで行う。Repository Secret `ANTHROPIC_API_KEY` を使って Claude API を2回だけ呼ぶ（通常の呼び出しと、本番と同じ経路での最小の構造化出力。2回目の `structured` が `{"ok": true}` でなければ失敗）。費用の上限は2回の合計で 0.05 USD（呼ぶ前に最悪の場合の費用、呼んだ後に実際の費用を確認）、5分で打ち切り、同時に1つだけ。送るのは固定の短い文で、業務データは送らない。
 
 ### Web 取得 Tool（第2回仕様 13章・R-20）
 
