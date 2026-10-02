@@ -29,17 +29,16 @@ class MarketResearcherInput(BaseModel):
     research_question: str | None = None
 
 
+# 出力契約 v1（Prompt market_researcher v1〜v3）。変更しない（第2回仕様 17章）。
+# docstring は JSON Schema の description になり LLM に送られるので、注記はコメントに書く。
 class MarketResearcherOutput(BaseModel):
-    """出力契約 v1（Prompt v1〜v3）。変更しない。"""
-
     summary: str
     market_overview: str
     claims: list[Claim] = Field(default_factory=list)
 
 
+# 出力契約 v2（Prompt market_researcher v4。第2回仕様 17章）。claims は最大10件。
 class MarketResearcherOutputV2(BaseModel):
-    """出力契約 v2（Prompt v4。第2回仕様 17章）。claims は最大10件。"""
-
     summary: str
     market_overview: str
     claims: list[Claim] = Field(default_factory=list, max_length=10)

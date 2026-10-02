@@ -27,17 +27,16 @@ class IdeaGeneratorInput(BaseModel):
     research_question: str | None = None
 
 
+# 出力契約 v1（Prompt idea_generator v1）。変更しない（第2回仕様 17章）。
+# docstring は JSON Schema の description になり LLM に送られるので、注記はコメントに書く。
 class IdeaGeneratorOutput(BaseModel):
-    """出力契約 v1（Prompt v1）。変更しない。"""
-
     summary: str
     ideas: list[IdeaCandidate] = Field(min_length=1, max_length=20)
     claims: list[Claim] = Field(default_factory=list)
 
 
+# 出力契約 v2（Prompt idea_generator v2。第2回仕様 17章）。claims は最大10件。
 class IdeaGeneratorOutputV2(BaseModel):
-    """出力契約 v2（Prompt v2。第2回仕様 17章）。claims は最大10件。"""
-
     summary: str
     ideas: list[IdeaCandidate] = Field(min_length=1, max_length=20)
     claims: list[Claim] = Field(default_factory=list, max_length=10)
