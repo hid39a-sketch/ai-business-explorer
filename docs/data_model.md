@@ -144,3 +144,4 @@ AI の出力は次の規則で検証し、違反した場合は実行を `failed
 - `0006`：データ分類。`explorations`・`evidence`・`analyses` に `classification` を追加します。既存の行はすべて `internal`（既存の分析の入力もすべて internal のため、算出値としても正しい）。downgrade は開発用で、分類の記録は失われます。
 - `0007`：費用管理と LLM・Tool のログ。`pricing`・`budgets`・`llm_calls`・`llm_call_payloads`・`tool_calls` を作り、`executions` に費用の合計と上限を追加します（既存の実行は 0 USD・上限なし）。`error_type` に `budget_exceeded` を追加します。downgrade は開発用で、費用とログは失われ、`budget_exceeded` は `unexpected` になります。
 - `0008`：Evidence 候補と収集のみ。`evidence_candidates`・`evidence_candidate_ai_notes`・`tool_call_outputs` を作り、`evidence` に来歴の列（既存はすべて `human_input`）、`stage_runs` に `mode`（既存はすべて `analyze`）を追加します。「最新の試行は1つ」の部分一意インデックスを analyze に限ります。downgrade は開発用で、候補・補助情報・来歴は失われ、collect_only の試行は superseded になります。
+- `0009`：`llm_calls` に `request_params`（JSONB）を追加します。実際に送った temperature・thinking・effort・max_tokens を記録します（第2回仕様 11章 SC候補-9）。既存の行は null のままで、値を推測して埋めません。downgrade では列を消します。

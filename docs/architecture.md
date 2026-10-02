@@ -55,10 +55,10 @@ PostgreSQL 16
 
 1. 人間が API からステージ実行を起動する（自動で次のステージへは進まない）。
 2. 事前検証：Idea が `adopted` か、前のステージに成功した最新の試行があるか、担当 AI社員が `active` で実装があるか、同じ範囲で置き換える試行がまだ終わっていない（`queued` / `running`）ことはないか（あれば 409）。
-3. 担当を決める。primary は、人間が指定した `ai_employee_id` → `stage_assignments` の primary → 有効な社員が1人だけならその社員、の順。secondary は人間が `secondary_ai_employee_ids` で選んだ社員で、そのステージに secondary として割り当てられている必要がある。
+3. 担当を決める。primary は、人間が指定した `ai_employee_id` → `stage_assignments` の primary → 有効な社員が1人だけならその社員、の順。secondary は人間が `secondary_ai_employee_ids` で選んだ社員で、そのステージに secondary として割り当てられている必要がある。実装・Prompt（key と version の両方）・解決後の（provider, model）がすべて primary と同じ secondary は使えない（V-08。割り当ての作成時と起動時の両方で確かめ、違反は 422）。
 4. `stage_runs` と `executions`（primary と secondary それぞれ1件）を `queued` で作成してコミットし、**202** を返す。再実行・差し戻しの場合は、対象ステージ以降の最新試行に `superseded_at` を記録する。
 5. ワーカー（`make worker`）が最も古い `queued` を1つ取り出し（`FOR UPDATE SKIP LOCKED`）、`running` にして実行する。実行中は別のセッションで `heartbeat_at` を更新する。`EXECUTION_MODE=sync`（テストと Fake LLM 用）では、応答の前に同じ処理で実行する。
-6. AI に渡す入力を、実行を始めた時点で決める。Evidence は active のものだけ（superseded・retracted・purged は渡さない）。前段の分析は、成功した最新の試行の **primary** のものだけ。渡した ID と状態は `stage_runs.input_snapshot` に残す。
+6. AI に渡す入力を、実行を始めた時点で決める。Evidence は active のものだけ（superseded・retracted・purged は渡さない）。前段の分析は、成功した最新の試行の **primary** のものだけで、レビューの状態に関係なく渡す（reject されたものも除外しない）。前段の分析には、その時点のレビューの状態（`review_status`）と、分析全体（claim_id なし）の最新のレビュー1件（decision・comment・corrections）を付ける（V-07）。渡した ID と状態（Evidence の状態、分析のレビューの状態と最新のレビューの ID）は `stage_runs.input_snapshot` に残し、後でレビューが変わっても書き換えない。
 7. primary を先に、続いて secondary を実行する。`AgentContext`（読み取り専用の入力、LLM、ToolBox、Prompt）を組み立てて AI社員を実行する。
 8. 出力を検証する：claim の ID が一意か、参照している Evidence が入力に含まれるか、relation の規則（relation は必須、重複なし、supports と contradicts の同時指定なし、`evidence_based` は supports か contradicts が必須）を守っているか、Idea 候補を出せるのは idea_generation だけか。構造化出力のスキーマ（下の「実際の LLM」）で形を保証したうえで、スキーマで表せない規則をここで確かめる。
 9. 成功した場合：`analyses`、`claims`、`claim_evidence_links`、（idea_generation の primary なら）`candidate` の Idea を1トランザクションで保存する。secondary の出力からは Idea を作らない。第1回の `analysis_evidence_links` には書き込まない（凍結済み）。
@@ -92,11 +92,11 @@ PostgreSQL 16
 - `llm/claude.py` が公式 SDK（`anthropic`）で Messages API を1回呼ぶ。SDK の型は外に出さない。指示（Prompt ファイル）は `system` に、Evidence など外部由来のデータを含む入力は `user` の JSON に分けて渡す。Tool は ToolBox 経由で、API の tool use は使わない。
 - 出力の形は構造化出力で指定する（PR-10）。AI社員が作る `LLMRequest.response_schema`（出力モデルの JSON Schema）を `anthropic.transform_schema` で API が受け付ける形にし、`output_config.format`（`type: json_schema`）として送る。応答の JSON オブジェクトは `LLMResponse.structured` に入れる。「```json」の囲みを外す処理はせず、JSON オブジェクトでない応答は AI社員の検証で `validation_error` になる。スキーマは実行ごとに作る（`agents/base.py` の `output_schema_for`）：Evidence がある実行では `evidence_id` をその実行で入力した Evidence の ID の enum に限定し、Evidence が0件の実行（アイデア生成は常にこちら）では主張から `evidence_refs` を除き、`kind` を inference / speculation に限定する。スキーマで表せない規則（C-09 の組み合わせ、文字数・件数、入力外の Evidence 参照）は、Pydantic とステージ実行側の検証で引き続き確かめる。
 - SDK の自動再試行はしない（`max_retries=0`）。1回の呼び出し＝1回の記録・計上にして、回数と費用の上限を正しく効かせるため。呼び出しの上限秒数（120秒）は呼び出しごとに渡す。出力の上限は 16,000 トークン（非ストリーミングの範囲）。
-- 費用の上限（10章）：呼び出しの前に、残りの1実行あたりの費用上限で払える出力トークン数まで `max_tokens` を絞り、払えなければ呼ばずに `budget_exceeded` にする。断られた（refusal）・途中で切れた（max_tokens）応答も、使ったトークン分の費用を記録してから `llm_error` にする（E-07）。
+- 費用の上限（10章）：呼び出しの前に、残りの1実行あたりの費用上限で払える出力トークン数まで `max_tokens` を絞り（入力は system・メッセージ・構造化出力のスキーマの文字数で見積もる。`estimated_input_tokens`）、払えなければ呼ばずに `budget_exceeded` にする。断られた（refusal）・途中で切れた（max_tokens）応答も、使ったトークン分の費用を記録してから `llm_error` にする（E-07）。
 - データ分類（11章）：送信上限は `LLM_MAX_CLASSIFICATION` で、指定がなければ internal（R-03。契約条件を確認するまで変えない）。restricted はどの LLM にも送らない。
 - API キー（`LLM_API_KEY`、SecretStr）は SDK のクライアントにだけ渡す。環境の他の認証情報（`ANTHROPIC_API_KEY`・ログイン済みのプロファイル）は使わない。キーは LLM ログ・例外のメッセージ・監査ログに入らない。キーが未設定なら anthropic の AI社員は `llm_error` で失敗し、テスト・CI には影響しない。
 - `APP_ENV=test` では実際のプロバイダーを使わない（テストや CI が実 API を呼ばないための安全装置）。テストは Fake LLM と、SDK を差し替えた Fake で行う。
-- 接続確認は手動のワークフロー `.github/workflows/llm-smoke.yml`（`workflow_dispatch`、入力 `confirm` に `run`）だけで行う。Repository Secret `ANTHROPIC_API_KEY` を使って Claude API を1回だけ呼び、費用の上限は 0.05 USD（呼ぶ前に最悪の場合の費用、呼んだ後に実際の費用を確認）、5分で打ち切り、同時に1つだけ。送るのは固定の短い文で、業務データは送らない。
+- 接続確認は手動のワークフロー `.github/workflows/llm-smoke.yml`（`workflow_dispatch`、入力 `confirm` に `run`）だけで行う。Repository Secret `ANTHROPIC_API_KEY` を使って Claude API を2回だけ呼ぶ（通常の呼び出しと、本番と同じ経路での最小の構造化出力。2回目の `structured` が `{"ok": true}` でなければ失敗）。費用の上限は2回の合計で 0.05 USD（呼ぶ前に最悪の場合の費用、呼んだ後に実際の費用を確認）、5分で打ち切り、同時に1つだけ。送るのは固定の短い文で、業務データは送らない。
 
 ### Web 取得 Tool（第2回仕様 13章・R-20）
 
@@ -122,6 +122,7 @@ URL を指定して公開 Web ページを取得する `web_fetch`（external_re
 - 単価は `pricing`（LLM はプロバイダー × モデル、Tool は名前。組織共通）。単価の変更は新しい行で行い、履歴を残す。呼び出しの時点の単価で費用を計算し、使った単価の ID を記録する。Fake LLM の単価（0 USD）は seed が登録する。
 - 費用は LLM・Tool を呼ぶたびに `llm_calls` / `tool_calls` に記録してすぐ確定し、`executions.cost_amount` に加算する。取り消し・失敗・タイムアウトで終わった実行の費用も残り、予算に計上する（E-07）。通貨はプロバイダーの請求通貨のまま（R-21）。
 - 予算は月単位（UTC の暦月）。組織全体（`budgets` に行がなければ設定の既定値：月額 100 USD、hard）と、探索案件ごと（任意）。hard は超えたら止める、soft は止めない。
+- LLM の単価は seed で登録する（`claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-4-5`、`claude-haiku-4-5-20251001`。公式にある ID だけ）。AI社員の作成、provider か model が変わる更新、割り当ての作成で、解決後の（provider, model）に有効な単価がなければ 422。起動時に単価がなければ 409 で、API は呼ばない（第2回仕様 10章 SC候補-12）。model を省略したときの既定（`llm/factory.py` の `DEFAULT_MODELS`）は、anthropic が `claude-opus-5-5`、fake が `fake-model-v1`。
 - 1実行あたりの上限は AI社員の `llm_config`（`max_cost_per_execution`、`max_llm_calls`、`max_tool_calls`、`max_tokens`）。未指定なら設定の既定値（1 USD、各20回）。受け付けた時点の費用上限を `executions.cost_limit` に残す。
 - 起動時：各 AI社員の LLM に単価がない、単価の通貨が予算と違う場合は 409。残りの予算（上限 − 当月の費用 − 待機中・実行中の実行の確保分）が新しい実行の上限の合計より少なければ 409（`budget_exceeded`）。
 - 実行中：LLM・Tool を呼ぶ前に、回数・費用の上限と当月の予算を確認し、超えていれば以降を止めて `failed`（`budget_exceeded`）。呼び出しの後に費用の上限を超えた場合も `failed` にする（その呼び出しの費用は記録する）。
@@ -129,7 +130,7 @@ URL を指定して公開 Web ページを取得する `web_fetch`（external_re
 
 ### LLM・Tool のログ（第2回仕様 12章・14章）
 
-- メタデータ（`llm_calls`・`tool_calls`）は永続。プロバイダー、モデル、Prompt の key / version / hash、トークン数、費用、応答時間、状態、エラー、プロバイダーのリクエストID、送ったデータの分類を持つ。
+- メタデータ（`llm_calls`・`tool_calls`）は永続。プロバイダー、モデル、Prompt の key / version / hash、トークン数、費用、応答時間、状態、エラー、プロバイダーのリクエストID、送ったデータの分類を持つ。`llm_calls.request_params` には、実際に送った temperature・thinking・effort・max_tokens を記録する（送っていない項目は `{"sent": false}`。失敗した呼び出しも含む。秘密情報は入れない。第2回仕様 11章 SC候補-9）。
 - 本文（`llm_call_payloads`）は送ったメッセージと応答だけ。送ったデータの分類が public・internal なら保存し、confidential 以上は保存しない（R-16）。設定 `LLM_PAYLOAD_MODE=none` で全体を保存しないこともできる（既定より厳しくすることだけを許す）。閲覧は admin のみ。
 - API キー・認証ヘッダーなどの秘密情報は、どのログにも保存しない（リクエストの本文から組み立て、ヘッダーは記録しない）。
 - 本文の保存期間は 90日（R-20）。`make retention`（`python -m ai_business_explorer.retention`）を手動または cron から起動して消す。メタデータは残し、消した日時を `payload_deleted_at` に記録する。

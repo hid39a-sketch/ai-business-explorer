@@ -2,7 +2,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from ai_business_explorer.api.v1.deps import AdminDep, AgentRegistryDep, PageDep, SessionDep
+from ai_business_explorer.api.v1.deps import (
+    AdminDep,
+    AgentRegistryDep,
+    PageDep,
+    SessionDep,
+    SettingsDep,
+)
 from ai_business_explorer.api.v1.schemas import AIEmployeeOut, PageOut
 from ai_business_explorer.application.ai_employees import AIEmployeeService
 from ai_business_explorer.application.commands import AIEmployeeCreate, AIEmployeeUpdate
@@ -17,9 +23,13 @@ router = APIRouter(prefix="/ai-employees", tags=["ai_employees"])
     summary="AI社員を登録する（admin のみ）",
 )
 def create_ai_employee(
-    body: AIEmployeeCreate, actor: AdminDep, session: SessionDep, registry: AgentRegistryDep
+    body: AIEmployeeCreate,
+    actor: AdminDep,
+    session: SessionDep,
+    registry: AgentRegistryDep,
+    settings: SettingsDep,
 ) -> object:
-    return AIEmployeeService(session, registry).create(actor, body)
+    return AIEmployeeService(session, registry).create(actor, body, settings.llm_provider)
 
 
 @router.get("", response_model=PageOut[AIEmployeeOut])
@@ -43,5 +53,8 @@ def update_ai_employee(
     actor: AdminDep,
     session: SessionDep,
     registry: AgentRegistryDep,
+    settings: SettingsDep,
 ) -> object:
-    return AIEmployeeService(session, registry).update(actor, employee_id, body)
+    return AIEmployeeService(session, registry).update(
+        actor, employee_id, body, settings.llm_provider
+    )

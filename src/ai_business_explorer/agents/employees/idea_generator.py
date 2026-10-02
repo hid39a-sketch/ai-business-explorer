@@ -1,14 +1,20 @@
 """IdeaGenerator（Fake）: 探索案件のテーマから Idea 候補を生成する。"""
 
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import ClassVar
+
 from pydantic import BaseModel, Field
 
 from ai_business_explorer.agents.base import (
     Agent,
     AgentContext,
+    AgentOutputError,
     AnalysisDraft,
     Claim,
     ExplorationView,
     IdeaCandidate,
+    OutputContract,
     output_schema_for,
     parse_json_object,
 )
@@ -21,10 +27,22 @@ class IdeaGeneratorInput(BaseModel):
     research_question: str | None = None
 
 
+# 出力契約 v1（Prompt idea_generator v1）。変更しない（第2回仕様 17章）。
+# docstring は JSON Schema の description になり LLM に送られるので、注記はコメントに書く。
 class IdeaGeneratorOutput(BaseModel):
     summary: str
     ideas: list[IdeaCandidate] = Field(min_length=1, max_length=20)
     claims: list[Claim] = Field(default_factory=list)
+
+
+# 出力契約 v2（Prompt idea_generator v2。第2回仕様 17章）。claims は最大10件。
+class IdeaGeneratorOutputV2(BaseModel):
+    summary: str
+    ideas: list[IdeaCandidate] = Field(min_length=1, max_length=20)
+    claims: list[Claim] = Field(default_factory=list, max_length=10)
+
+
+_V1 = OutputContract("idea_generation.v1", IdeaGeneratorOutput)
 
 
 class IdeaGenerator(Agent):
@@ -33,8 +51,16 @@ class IdeaGenerator(Agent):
     output_schema_version = "idea_generation.v1"
     input_model = IdeaGeneratorInput
     output_model = IdeaGeneratorOutput
+    output_contracts: ClassVar[Mapping[tuple[str, str], OutputContract]] = MappingProxyType(
+        {
+            ("idea_generator", "v1"): _V1,
+            ("idea_generator", "v2"): OutputContract("idea_generation.v2", IdeaGeneratorOutputV2),
+        }
+    )
+    legacy_mismatch_contract = _V1
 
     def run(self, ctx: AgentContext) -> AnalysisDraft:
+        output_model = self.contract_for(ctx.prompt.key, ctx.prompt.version).output_model
         payload = IdeaGeneratorInput(
             exploration=ctx.exploration, research_question=ctx.research_question
         )
@@ -46,7 +72,7 @@ class IdeaGenerator(Agent):
                 prompt_key=ctx.prompt.key,
                 prompt_version=ctx.prompt.version,
                 # Evidence を受け取らないので、Evidence 0件のスキーマ（evidence_based を出せない）
-                response_schema=output_schema_for(IdeaGeneratorOutput, []),
+                response_schema=output_schema_for(output_model, []),
             )
         )
         raw = (
@@ -54,7 +80,9 @@ class IdeaGenerator(Agent):
             if response.structured is not None
             else parse_json_object(response.text)
         )
-        output = IdeaGeneratorOutput.model_validate(raw)
+        output = output_model.model_validate(raw)
+        if not isinstance(output, IdeaGeneratorOutput | IdeaGeneratorOutputV2):
+            raise AgentOutputError(f"unexpected output model: {type(output).__name__}")
         return AnalysisDraft(
             summary=output.summary,
             claims=output.claims,

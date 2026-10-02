@@ -35,7 +35,7 @@ class Agent(ABC):
 
 | 項目 | 内容 |
 |---|---|
-| 入力データ（読み取り専用） | `exploration`、`idea`、`evidence`、`prior_analyses`、`research_question` |
+| 入力データ（読み取り専用） | `exploration`、`idea`、`evidence`、`prior_analyses`（前段の分析。`review_status` と分析全体の最新のレビュー `latest_review` 付き）、`research_question` |
 | `llm` | 使用量とモデルが自動で集計される |
 | `tools` | 許可リストと副作用ポリシーを強制する |
 | `prompt` | key、version、本文、SHA-256 |
@@ -62,7 +62,7 @@ Tool の結果（`ToolResult.evidence_candidates`）は、仕組みが Evidence 
 | key | 担当ステージ | 内容 |
 |---|---|---|
 | `idea_generator` | idea_generation | テーマから Idea 候補を3件生成する（`candidate` で登録） |
-| `market_researcher` | market_research | Evidence によって真偽を評価した主張を `evidence_based` とし、根拠のない推論は `inference` として明示する。Prompt は v2（relation の意味を明記。v1 は変更せず残す） |
+| `market_researcher` | market_research | Evidence によって真偽を評価した主張を `evidence_based` とし、根拠のない推論は `inference` として明示する。前段の分析のレビュー（状態と最新の1件）を考慮する。Prompt は v3（v2 の relation の意味に、レビュー情報の扱いを追加。v1・v2 は変更せず残す） |
 
 ## AI社員の追加手順
 

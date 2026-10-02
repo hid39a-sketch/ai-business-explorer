@@ -12,11 +12,13 @@ from ai_business_explorer.application.common import (
     require_human,
     snapshot,
 )
+from ai_business_explorer.application.costs import ensure_llm_pricing
 from ai_business_explorer.application.pagination import Page, PageRequest, paginate
 from ai_business_explorer.domain.errors import DomainValidationError, InvalidStateError
 from ai_business_explorer.domain.stages import get_stage
 from ai_business_explorer.infrastructure.db.models import Actor, AIEmployee
 from ai_business_explorer.infrastructure.db.repositories import AIEmployeeRepository
+from ai_business_explorer.llm.factory import resolve_llm_config
 from ai_business_explorer.prompts.loader import prompt_exists
 
 AUDIT_FIELDS = [
@@ -44,7 +46,7 @@ class AIEmployeeService:
         self.employees = AIEmployeeRepository(session)
         self.agent_registry = agent_registry
 
-    def create(self, actor: Actor, cmd: AIEmployeeCreate) -> AIEmployee:
+    def create(self, actor: Actor, cmd: AIEmployeeCreate, default_provider: str) -> AIEmployee:
         require_human(actor, "register AI employees")
         organization_id = current_organization_id(self.session)
         if self.employees.get_by_key(organization_id, cmd.key) is not None:
@@ -56,7 +58,9 @@ class AIEmployeeService:
             status=cmd.status.value,
             version=1,
         )
-        self._validate_and_fill(employee)
+        self._validate_and_fill(employee, prompt_changed=True)
+        # 解決後の（provider, model）に有効な単価がなければ登録しない（10章 SC候補-12。422）
+        ensure_llm_pricing(self.session, *resolve_llm_config(employee.llm_config, default_provider))
         self.employees.add(employee)
         record_audit(
             self.session,
@@ -83,10 +87,14 @@ class AIEmployeeService:
             page=page,
         )
 
-    def update(self, actor: Actor, employee_id: UUID, cmd: AIEmployeeUpdate) -> AIEmployee:
+    def update(
+        self, actor: Actor, employee_id: UUID, cmd: AIEmployeeUpdate, default_provider: str
+    ) -> AIEmployee:
         require_human(actor, "update AI employees")
         employee = self.employees.get_or_raise(employee_id)
         before = snapshot(employee, AUDIT_FIELDS)
+        resolved_before = resolve_llm_config(employee.llm_config, default_provider)
+        prompt_before = _prompt_fields(employee)
         changes = cmd.model_dump(exclude_unset=True, mode="json")
         if not changes:
             return employee
@@ -94,7 +102,17 @@ class AIEmployeeService:
             setattr(employee, field, value)  # llm_config は dict として格納される
         if cmd.status is not None:
             employee.status = cmd.status.value
-        self._validate_and_fill(employee)
+        prompt_changed = _prompt_fields(employee) != prompt_before
+        self._validate_and_fill(
+            employee,
+            prompt_changed=prompt_changed,
+            # 契約が変わりうる更新で output_format を指定しなければ、新しい契約のスキーマにする
+            refresh_output_format=prompt_changed and "output_format" not in changes,
+        )
+        # provider か model が変わる更新だけ、単価を確かめる（10章 SC候補-12。422）
+        resolved_after = resolve_llm_config(employee.llm_config, default_provider)
+        if resolved_after != resolved_before:
+            ensure_llm_pricing(self.session, *resolved_after)
         # 定義が変わるたびにバージョンを上げる。
         # 過去の実行は executions のスナップショットで追跡できる。
         employee.version += 1
@@ -111,7 +129,14 @@ class AIEmployeeService:
         self.session.commit()
         return employee
 
-    def _validate_and_fill(self, employee: AIEmployee) -> None:
+    def _validate_and_fill(
+        self, employee: AIEmployee, *, prompt_changed: bool, refresh_output_format: bool = False
+    ) -> None:
+        """prompt_changed：実装・prompt_key・prompt_version のどれかを設定・変更するか。
+
+        作成では常に真。refresh_output_format：output_format を今の出力契約のスキーマで入れ直すか
+        （更新で契約が変わりうるのに、output_format を指定しないとき）。
+        """
         stage = get_stage(employee.stage_key)
         if not stage.executable_by_ai:
             raise DomainValidationError(
@@ -139,11 +164,28 @@ class AIEmployeeService:
                 f"implementation '{agent.implementation_key}' handles stage '{agent.stage_key}', "
                 f"not '{employee.stage_key}'"
             )
-        if employee.prompt_key is None:
+        if employee.prompt_key is None or employee.prompt_version is None:
             raise DomainValidationError(
                 "an implemented AI employee requires prompt_key/prompt_version"
             )
+        # 実装と prompt_key が一致しない構成は、新しく作れない（第2回仕様 17章 C1。422）。
+        # 既存の不一致の AI社員は、実装・Prompt を変えない更新なら通す（経過措置。v1 契約で動く）
+        if (
+            prompt_changed
+            and agent.requires_matching_prompt_key()
+            and employee.prompt_key != agent.implementation_key
+        ):
+            raise DomainValidationError(
+                f"prompt_key '{employee.prompt_key}' does not match implementation "
+                f"'{agent.implementation_key}'"
+            )
+        # （prompt_key, prompt_version）に対応する出力契約がなければ使えない（17章。422）
+        contract = agent.contract_for(employee.prompt_key, employee.prompt_version)
         if employee.input_format is None:
             employee.input_format = agent.input_model.model_json_schema()
-        if employee.output_format is None:
-            employee.output_format = agent.output_model.model_json_schema()
+        if employee.output_format is None or refresh_output_format:
+            employee.output_format = contract.output_model.model_json_schema()
+
+
+def _prompt_fields(employee: AIEmployee) -> tuple[str | None, str | None, str | None]:
+    return (employee.implementation_key, employee.prompt_key, employee.prompt_version)

@@ -292,6 +292,18 @@ class ClaimEvidenceLinkRepository:
 class HumanReviewRepository(Repository[HumanReview]):
     model = HumanReview
 
+    def latest_for_analyses(self, analysis_ids: Sequence[UUID]) -> dict[UUID, HumanReview]:
+        """分析ごとの、分析全体（claim_id なし）の最新のレビュー。review_status を決める1件。"""
+        if not analysis_ids:
+            return {}
+        rows = self.list_where(
+            HumanReview.analysis_id.in_(list(analysis_ids)), HumanReview.claim_id.is_(None)
+        )
+        latest: dict[UUID, HumanReview] = {}
+        for review in sorted(rows, key=lambda r: (r.created_at, r.id)):
+            latest[review.analysis_id] = review
+        return latest
+
 
 class HumanDecisionRepository(Repository[HumanDecision]):
     model = HumanDecision

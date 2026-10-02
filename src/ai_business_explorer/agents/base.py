@@ -8,12 +8,16 @@
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ai_business_explorer.domain.enums import ClaimKind, EvidenceRelation
+from ai_business_explorer.domain.errors import DomainValidationError
 from ai_business_explorer.llm.base import LLMClient
 from ai_business_explorer.prompts.loader import PromptTemplate
 from ai_business_explorer.tools.base import ToolBox
@@ -49,10 +53,23 @@ class EvidenceView(_Frozen):
     summary: str | None
 
 
+class ReviewView(_Frozen):
+    """分析全体の最新の Human Review。人間の判断で、Evidence ではない（根拠として引用できない）。"""
+
+    decision: str
+    comment: str | None
+    corrections: dict[str, Any] | None
+
+
 class AnalysisView(_Frozen):
     id: UUID
     stage_key: str
     summary: str
+    # 実行を始めた時点の人間のレビューの状態（V-07。値は ReviewStatus）
+    review_status: str
+    # 分析全体（claim_id なし）の最新のレビュー。review_status はこのレビューで決まっている。
+    # レビューがなければ None（review_status は pending_review）
+    latest_review: ReviewView | None = None
 
 
 # 主張と Evidence の関係（第2回仕様 D-15・C-09）。docstring は出力スキーマの description として
@@ -164,12 +181,54 @@ class AgentOutputError(Exception):
     """AI社員の出力が出力スキーマや分離ルールに反する。"""
 
 
+@dataclass(frozen=True)
+class OutputContract:
+    """出力契約（第2回仕様 17章）：出力モデルと、その版（分析の schema_version に記録する）。"""
+
+    schema_version: str
+    output_model: type[BaseModel]
+
+
 class Agent(ABC):
     implementation_key: ClassVar[str]
     stage_key: ClassVar[str]
+    # 出力契約が1つだけの実装の契約。output_contracts を持つ実装では使わない
     output_schema_version: ClassVar[str]
     input_model: ClassVar[type[BaseModel]]
     output_model: ClassVar[type[BaseModel]]
+    # （prompt_key, prompt_version）→ 出力契約（第2回仕様 17章）。空でなければ、
+    # prompt_key は実装と一致していなければならず、表にない組み合わせは使えない
+    output_contracts: ClassVar[Mapping[tuple[str, str], OutputContract]] = MappingProxyType({})
+    # 経過措置（17章 C1）：実装と prompt_key が一致しない既存の AI社員に使う契約（v1）。
+    # 不一致の構成を正式に許すものではない（新規作成・不一致にする更新は 422）
+    legacy_mismatch_contract: ClassVar[OutputContract | None] = None
+
+    @classmethod
+    def requires_matching_prompt_key(cls) -> bool:
+        """prompt_key が実装と一致していなければならないか（出力契約の表を持つ実装）。"""
+        return bool(cls.output_contracts)
+
+    @classmethod
+    def contract_for(cls, prompt_key: str, prompt_version: str) -> OutputContract:
+        """（prompt_key, prompt_version）から出力契約を一意に決める（17章）。
+
+        - 表にある組み合わせ：その契約。
+        - 実装と prompt_key が一致しない（既存の AI社員だけがありうる）：経過措置の v1 契約。
+          v2 契約には切り替えない。
+        - prompt_key が一致して表にない版：DomainValidationError。
+        """
+        if not cls.output_contracts:
+            return OutputContract(cls.output_schema_version, cls.output_model)
+        contract = cls.output_contracts.get((prompt_key, prompt_version))
+        if contract is not None:
+            return contract
+        if prompt_key != cls.implementation_key and cls.legacy_mismatch_contract is not None:
+            return cls.legacy_mismatch_contract
+        supported = ", ".join(f"{k}/{v}" for k, v in sorted(cls.output_contracts))
+        raise DomainValidationError(
+            f"no output contract for {cls.implementation_key} prompt {prompt_key}/{prompt_version} "
+            f"(supported: {supported})"
+        )
 
     @abstractmethod
     def run(self, ctx: AgentContext) -> AnalysisDraft: ...

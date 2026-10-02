@@ -38,9 +38,41 @@ sudo -u postgres createdb -O abe ai_business_explorer_test
 
 1. GitHub のリポジトリの Settings → Secrets and variables → Actions で、Repository Secret `ANTHROPIC_API_KEY` を登録する（キーはコード・`.env.example`・Issue などに書かない）。
 2. Actions → 「LLM smoke test (manual)」→ Run workflow で、`confirm` に `run` と入力して起動する。
-3. Claude API が1回だけ呼ばれ、モデル・トークン数・費用（上限 0.05 USD）・リクエストIDが表示される。キーは表示されない。
+3. Claude API が2回だけ呼ばれる（通常の呼び出しと、最小の構造化出力 `{"ok": true}`）。それぞれのモデル・トークン数・費用・リクエストIDと、構造化出力の確認結果（`structured_ok`）、合計の費用（上限 0.05 USD）が表示される。キーは表示されない。
 
 ローカルで試す場合は `LLM_SMOKE_CONFIRM=yes LLM_API_KEY=... uv run python -m ai_business_explorer.llm_smoke`（`APP_ENV=test` では動かない）。
+
+## LLM に送る設定と、入力の見積もり
+
+- temperature は Haiku 4.5（`claude-haiku-4-5`・`claude-haiku-4-5-20251001`）にだけ 0 を送り、他のモデルには送りません。temperature=0 でも同じ入力で同じ出力になるとは限りません（第2回仕様 11章 SC候補-9）。再現性は、実行の条件（入力・Prompt の版と hash・モデル・実際に送った設定）を追跡できることを指します。
+- thinking と effort は送らず、各モデルの既定を使います（SC候補-10）。既定はモデルの版で変わりうるので、実際に送った temperature・thinking・effort・max_tokens を `llm_calls.request_params` に記録します（送っていない項目は `{"sent": false}`）。
+- 呼ぶ前の入力の見積もり（`estimated_input_tokens`）は、system・メッセージ・スキーマの文字数の合計です。margin（文字数からトークン数への換算の誤差への余裕）は 0 です（SC候補-13）。実測では実際の入力トークンはすべて文字数より少なく（比は最大 0.908）、トークン数が文字数を超える入力では見積もりが少なくなりえます。見積もりは max_tokens を残りの予算で絞るためだけに使い、予算の予約には使いません。
+
+## Prompt の版の切り替え（既存の DB）
+
+seed は AI社員がないときだけ作るので、Prompt の新しい版（例：idea_generator の v2、market_researcher の v4）を seed に入れても、既存の DB の AI社員は書き換わりません。既存の DB で切り替えるときは、admin が API で更新します（migration は使わない）。
+
+```bash
+curl -X PATCH http://localhost:8000/api/v1/ai-employees/<market_researcher の id> \
+  -H "X-Actor-Id: <admin の actor id>" -H "Content-Type: application/json" \
+  -d '{"prompt_version": "v4"}'
+```
+
+Prompt の key と版（`prompt_key`, `prompt_version`）で、出力契約（出力モデルと分析の `schema_version`）が決まります（第2回仕様 17章）。対応は各 AI社員の実装の `output_contracts` にあり、`Agent.contract_for(prompt_key, prompt_version)` で引きます。
+
+| 実装 | Prompt の版 | 出力契約 | schema_version |
+|---|---|---|---|
+| idea_generator | v1 | v1 | idea_generation.v1 |
+| idea_generator | v2 | v2（日本語・ideas の既定5件・claims 10件まで・出典のない数値は推定と明示） | idea_generation.v2 |
+| market_researcher | v1・v2・v3 | v1 | market_research.v1 |
+| market_researcher | v4 | v2（上に加えて、一般化は inference・relation は context） | market_research.v2 |
+
+- 新しい seed は idea_generator v2・market_researcher v4 で作ります。v1 の Prompt・出力モデルは変えていないので、切り替えなければ既存の AI社員の挙動は変わりません。
+- Prompt のファイル（`prompts/<key>/<version>.md`）がない版、または出力契約のない版は 422 で拒否されます。
+- 実装と `prompt_key` が一致しない AI社員は、新しく作れません（422）。実装・`prompt_key`・`prompt_version` を変えて不一致になる更新も 422 です（第2回仕様 17章 C1）。
+- この規則の前からある不一致の AI社員は、自動では移行しません。経過措置として v1 契約で実行でき、v2 契約には切り替わりません。一致させる更新（例：`prompt_key` を実装と同じにする）は通ります。不一致の構成を正式に許すものではありません。
+- AI社員の版（`version`）が1つ上がり、変更前後が監査ログに残ります。過去の実行は、実行ごとに記録した `prompt_version` と `prompt_hash` で追跡できます。
+- LLM に送る出力スキーマは実行のたびにコードから作るので（`output_schema_for`）、AI社員に保存されている `output_format` が古くても、実行には影響しません。`output_format` は記録用です。実装・`prompt_key`・`prompt_version` を変える更新で `output_format` を指定しなければ、新しい出力契約のスキーマに入れ直されます（指定すればその値を使います）。
 
 ## テスト構成
 

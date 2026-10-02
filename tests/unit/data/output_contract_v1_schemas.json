@@ -1,0 +1,531 @@
+{
+  "evidence_ids": [
+    "00000000-0000-4000-8000-0000000000e1",
+    "00000000-0000-4000-8000-0000000000e2"
+  ],
+  "output_schema_for": {
+    "idea_generator_evidence0": {
+      "$defs": {
+        "Claim": {
+          "properties": {
+            "id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "inference",
+                "speculation"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "text": {
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "kind"
+          ],
+          "title": "Claim",
+          "type": "object"
+        },
+        "IdeaCandidate": {
+          "description": "AI が生成する Idea 候補。AI が書けるのは title / summary / problem のみ。",
+          "properties": {
+            "problem": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Problem"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Summary"
+            },
+            "title": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "title": "IdeaCandidate",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/Claim"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "ideas": {
+          "items": {
+            "$ref": "#/$defs/IdeaCandidate"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Ideas",
+          "type": "array"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "ideas"
+      ],
+      "title": "IdeaGeneratorOutput",
+      "type": "object"
+    },
+    "market_researcher_evidence0": {
+      "$defs": {
+        "Claim": {
+          "properties": {
+            "id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "inference",
+                "speculation"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "text": {
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "kind"
+          ],
+          "title": "Claim",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/Claim"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "market_overview": {
+          "title": "Market Overview",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "market_overview"
+      ],
+      "title": "MarketResearcherOutput",
+      "type": "object"
+    },
+    "market_researcher_evidence2": {
+      "$defs": {
+        "Claim": {
+          "properties": {
+            "evidence_refs": {
+              "items": {
+                "$ref": "#/$defs/EvidenceRef"
+              },
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ClaimKind"
+            },
+            "text": {
+              "minLength": 1,
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "kind"
+          ],
+          "title": "Claim",
+          "type": "object"
+        },
+        "ClaimKind": {
+          "enum": [
+            "evidence_based",
+            "inference",
+            "speculation"
+          ],
+          "title": "ClaimKind",
+          "type": "string"
+        },
+        "EvidenceRef": {
+          "description": "relation は、主張（claim）の内容と Evidence の関係（Idea の前提との関係ではない）。\n\nsupports：Evidence がその主張の内容を支持する。\ncontradicts：Evidence がその主張の内容を否定する。\ncontext：Evidence は主張の真偽を直接支持・否定せず、前提・背景などの文脈を提供する。",
+          "properties": {
+            "evidence_id": {
+              "enum": [
+                "00000000-0000-4000-8000-0000000000e1",
+                "00000000-0000-4000-8000-0000000000e2"
+              ],
+              "title": "Evidence Id",
+              "type": "string"
+            },
+            "relation": {
+              "$ref": "#/$defs/EvidenceRelation"
+            }
+          },
+          "required": [
+            "evidence_id",
+            "relation"
+          ],
+          "title": "EvidenceRef",
+          "type": "object"
+        },
+        "EvidenceRelation": {
+          "enum": [
+            "supports",
+            "contradicts",
+            "context"
+          ],
+          "title": "EvidenceRelation",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/Claim"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "market_overview": {
+          "title": "Market Overview",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "market_overview"
+      ],
+      "title": "MarketResearcherOutput",
+      "type": "object"
+    }
+  },
+  "source": "main a17e6b2",
+  "transform_schema": {
+    "idea_generator_evidence0": {
+      "$defs": {
+        "Claim": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "description": "{maxLength: 64, minLength: 1}",
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "inference",
+                "speculation"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "text": {
+              "description": "{minLength: 1}",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "kind"
+          ],
+          "title": "Claim",
+          "type": "object"
+        },
+        "IdeaCandidate": {
+          "additionalProperties": false,
+          "description": "AI が生成する Idea 候補。AI が書けるのは title / summary / problem のみ。",
+          "properties": {
+            "problem": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "{default: None}",
+              "title": "Problem"
+            },
+            "summary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "{default: None}",
+              "title": "Summary"
+            },
+            "title": {
+              "description": "{maxLength: 200, minLength: 1}",
+              "title": "Title",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "title": "IdeaCandidate",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/Claim"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "ideas": {
+          "description": "{maxItems: 20}",
+          "items": {
+            "$ref": "#/$defs/IdeaCandidate"
+          },
+          "minItems": 1,
+          "title": "Ideas",
+          "type": "array"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "ideas"
+      ],
+      "title": "IdeaGeneratorOutput",
+      "type": "object"
+    },
+    "market_researcher_evidence0": {
+      "$defs": {
+        "Claim": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "description": "{maxLength: 64, minLength: 1}",
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "inference",
+                "speculation"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "text": {
+              "description": "{minLength: 1}",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "kind"
+          ],
+          "title": "Claim",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/Claim"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "market_overview": {
+          "title": "Market Overview",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "market_overview"
+      ],
+      "title": "MarketResearcherOutput",
+      "type": "object"
+    },
+    "market_researcher_evidence2": {
+      "$defs": {
+        "Claim": {
+          "additionalProperties": false,
+          "properties": {
+            "evidence_refs": {
+              "items": {
+                "$ref": "#/$defs/EvidenceRef"
+              },
+              "title": "Evidence Refs",
+              "type": "array"
+            },
+            "id": {
+              "description": "{maxLength: 64, minLength: 1}",
+              "title": "Id",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ClaimKind"
+            },
+            "text": {
+              "description": "{minLength: 1}",
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "text",
+            "kind"
+          ],
+          "title": "Claim",
+          "type": "object"
+        },
+        "ClaimKind": {
+          "enum": [
+            "evidence_based",
+            "inference",
+            "speculation"
+          ],
+          "title": "ClaimKind",
+          "type": "string"
+        },
+        "EvidenceRef": {
+          "additionalProperties": false,
+          "description": "relation は、主張（claim）の内容と Evidence の関係（Idea の前提との関係ではない）。\n\nsupports：Evidence がその主張の内容を支持する。\ncontradicts：Evidence がその主張の内容を否定する。\ncontext：Evidence は主張の真偽を直接支持・否定せず、前提・背景などの文脈を提供する。",
+          "properties": {
+            "evidence_id": {
+              "enum": [
+                "00000000-0000-4000-8000-0000000000e1",
+                "00000000-0000-4000-8000-0000000000e2"
+              ],
+              "title": "Evidence Id",
+              "type": "string"
+            },
+            "relation": {
+              "$ref": "#/$defs/EvidenceRelation"
+            }
+          },
+          "required": [
+            "evidence_id",
+            "relation"
+          ],
+          "title": "EvidenceRef",
+          "type": "object"
+        },
+        "EvidenceRelation": {
+          "enum": [
+            "supports",
+            "contradicts",
+            "context"
+          ],
+          "title": "EvidenceRelation",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/Claim"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "market_overview": {
+          "title": "Market Overview",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "market_overview"
+      ],
+      "title": "MarketResearcherOutput",
+      "type": "object"
+    }
+  }
+}

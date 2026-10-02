@@ -16,6 +16,11 @@ LLMClient の実装の1つ。AI社員・ドメインは llm/base.py の型だけ
   （AI社員の出力モデルの JSON Schema）を anthropic.transform_schema で API が受け付ける形にして
   送り、応答の JSON を LLMResponse.structured に入れる。「```json」の囲みなどを外す処理はしない。
   スキーマで表せない制約（C-09 など）は、これまでどおり AI社員とステージ実行側で検証する。
+- temperature は、実際に送るモデル ID が Haiku 4.5 のときだけ 0 を送る（第2回仕様 11章、
+  2026-10-02 の確定）。それ以外のモデル（Opus 5.5・Sonnet 5.5 など）には送らない。
+  LLMRequest.temperature は使わない。temperature=0 は同じ出力を保証しない（SC候補-9）。
+- thinking と effort は送らず、各モデルの既定を使う（11章 SC候補-10）。実際に送った設定は
+  sent_params で返し、llm_calls.request_params に記録する（SC候補-9）。
 """
 
 import json
@@ -32,6 +37,7 @@ from ai_business_explorer.llm.base import (
     LLMResponse,
     LLMResponseError,
     LLMUsage,
+    sent_param,
 )
 
 CLAUDE_PROVIDER = "anthropic"
@@ -39,6 +45,8 @@ CLAUDE_DEFAULT_MODEL = "claude-opus-5-5"
 # 指定がないときの出力上限（非ストリーミングで HTTP のタイムアウトにかからない範囲）
 DEFAULT_MAX_TOKENS = 16_000
 MAX_ERROR_DETAIL = 500
+# temperature=0 を送るモデル（Haiku 4.5 の別名と日付付きの版）。送るモデル ID の完全一致で判定する
+ZERO_TEMPERATURE_MODELS = frozenset({"claude-haiku-4-5", "claude-haiku-4-5-20251001"})
 
 
 # SDK のクライアント（テストでは messages.create と with_options を持つ Fake に差し替える）
@@ -65,25 +73,15 @@ class ClaudeLLMClient:
     def provider(self) -> str:
         return CLAUDE_PROVIDER
 
+    def sent_params(self, request: LLMRequest) -> dict[str, Any]:
+        """実際に送る temperature・thinking・effort・max_tokens（11章 SC候補-9。記録用）。"""
+        return describe_sent_params(_request_params(request))
+
     def complete(self, request: LLMRequest) -> LLMResponse:
         client = self._client
         if request.timeout_seconds is not None:
             client = client.with_options(timeout=request.timeout_seconds)
-        params: dict[str, Any] = {
-            "model": request.model,
-            # 非ストリーミングの上限（SDK の HTTP タイムアウトにかからない範囲）を超えない
-            "max_tokens": min(request.max_tokens or DEFAULT_MAX_TOKENS, DEFAULT_MAX_TOKENS),
-            # 指示（system）と、外部由来のデータを含む入力（user の JSON）を分けて渡す
-            "system": request.system,
-            "messages": [{"role": m.role, "content": m.content} for m in request.messages],
-        }
-        if request.response_schema is not None:
-            params["output_config"] = {
-                "format": {
-                    "type": "json_schema",
-                    "schema": anthropic.transform_schema(request.response_schema),
-                }
-            }
+        params = _request_params(request)
         try:
             message = client.messages.create(**params)
         except anthropic.APITimeoutError as exc:
@@ -95,6 +93,44 @@ class ClaudeLLMClient:
         except anthropic.AnthropicError as exc:
             raise LLMError(f"Claude API error: {exc.__class__.__name__}") from exc
         return _to_response(message, request)
+
+
+def _request_params(request: LLMRequest) -> dict[str, Any]:
+    """messages.create に渡す引数。sent_params の記録も、この引数から作る。"""
+    params: dict[str, Any] = {
+        "model": request.model,
+        # 非ストリーミングの上限（SDK の HTTP タイムアウトにかからない範囲）を超えない
+        "max_tokens": min(request.max_tokens or DEFAULT_MAX_TOKENS, DEFAULT_MAX_TOKENS),
+        # 指示（system）と、外部由来のデータを含む入力（user の JSON）を分けて渡す
+        "system": request.system,
+        "messages": [{"role": m.role, "content": m.content} for m in request.messages],
+    }
+    if request.model in ZERO_TEMPERATURE_MODELS:
+        # SDK（1.11）の messages.create には temperature の引数がないので、本文に直接足す
+        params["extra_body"] = {"temperature": 0}
+    if request.response_schema is not None:
+        params["output_config"] = {
+            "format": {
+                "type": "json_schema",
+                "schema": anthropic.transform_schema(request.response_schema),
+            }
+        }
+    return params
+
+
+def describe_sent_params(params: dict[str, Any]) -> dict[str, Any]:
+    """messages.create の引数から、記録する設定を作る。extra_body で本文に入るものも含める。
+
+    API キー・ヘッダー・本文（system・messages）は含めない。
+    """
+    body = {**params, **params.get("extra_body", {})}
+    output_config = params.get("output_config", {})
+    return {
+        "temperature": sent_param("temperature" in body, body.get("temperature")),
+        "thinking": sent_param("thinking" in body, body.get("thinking")),
+        "effort": sent_param("effort" in output_config, output_config.get("effort")),
+        "max_tokens": sent_param("max_tokens" in body, body.get("max_tokens")),
+    }
 
 
 def _status_error_message(exc: anthropic.APIStatusError) -> str:

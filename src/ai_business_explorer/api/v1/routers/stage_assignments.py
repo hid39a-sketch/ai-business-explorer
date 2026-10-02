@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from ai_business_explorer.api.v1.deps import AdminDep, PageDep, SessionDep
+from ai_business_explorer.api.v1.deps import AdminDep, PageDep, SessionDep, SettingsDep
 from ai_business_explorer.api.v1.schemas import PageOut, StageAssignmentOut
 from ai_business_explorer.application.commands import StageAssignmentCreate
 from ai_business_explorer.application.stage_assignments import StageAssignmentService
@@ -24,9 +24,9 @@ def list_stage_assignments(
     summary="ステージにAI社員を割り当てる（admin のみ）",
 )
 def create_stage_assignment(
-    body: StageAssignmentCreate, actor: AdminDep, session: SessionDep
+    body: StageAssignmentCreate, actor: AdminDep, session: SessionDep, settings: SettingsDep
 ) -> object:
-    return StageAssignmentService(session).create(actor, body)
+    return StageAssignmentService(session).create(actor, body, settings.llm_provider)
 
 
 @router.delete(

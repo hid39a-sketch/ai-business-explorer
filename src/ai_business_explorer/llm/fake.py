@@ -9,7 +9,7 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from ai_business_explorer.llm.base import LLMError, LLMRequest, LLMResponse, LLMUsage
+from ai_business_explorer.llm.base import LLMError, LLMRequest, LLMResponse, LLMUsage, sent_param
 
 Responder = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -92,6 +92,18 @@ class FakeLLMClient:
     @property
     def provider(self) -> str:
         return FAKE_PROVIDER
+
+    def sent_params(self, request: LLMRequest) -> dict[str, Any]:
+        """記録の形は Claude と同じ。Fake は temperature・thinking・effort を使わない。
+
+        max_tokens は受け取った値を記録する（Fake の応答の長さには影響しない）。
+        """
+        return {
+            "temperature": sent_param(False),
+            "thinking": sent_param(False),
+            "effort": sent_param(False),
+            "max_tokens": sent_param(request.max_tokens is not None, request.max_tokens),
+        }
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         if self._fail_with is not None:

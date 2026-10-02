@@ -13,6 +13,7 @@
   保存期間で消す）に分ける。confidential 以上の本文は保存しない。秘密情報は保存しない。
 """
 
+import json
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -74,6 +75,7 @@ from ai_business_explorer.llm.base import (
     LLMRequest,
     LLMResponse,
     LLMResponseError,
+    ReportsSentParams,
 )
 from ai_business_explorer.tools.base import Tool, ToolError, ToolResult
 
@@ -99,6 +101,25 @@ def current_month() -> date:
     return date(now.year, now.month, 1)
 
 
+def estimated_input_tokens(request: LLMRequest) -> int:
+    """呼ぶ前の入力トークン数の見積もり（文字数をトークン数の目安にする）。
+
+    system とメッセージに加えて、構造化出力のスキーマ（response_schema）も入力として数える。
+    スキーマは API への入力になり、送る形（Claude のクライアントは response_schema が None で
+    なければ送る）と同じ条件で数える。実際の費用は、呼んだ後に API の使用量で記録する。
+
+    見積もりは文字数のまま使い、margin（文字数からトークン数への換算の誤差への余裕）は 0
+    （第2回仕様 10章 SC候補-13。実測19回で、実際の入力トークンはすべて文字数より少なく、比は最大
+    0.908）。トークン数が文字数を超える入力では、見積もりが少なくなりうる。その場合も、実際の費用が
+    実行の上限を超えれば、呼んだ後に budget_exceeded になる。見積もりは max_tokens を絞るためだけに
+    使い、予算の予約には使わない。
+    """
+    chars = len(request.system) + sum(len(m.content) for m in request.messages)
+    if request.response_schema is not None:
+        chars += len(json.dumps(request.response_schema, ensure_ascii=False))
+    return chars
+
+
 def find_pricing(
     session: Session, kind: PricingKind, provider: str, model: str, at: datetime
 ) -> Pricing | None:
@@ -115,6 +136,15 @@ def find_pricing(
         .limit(1)
     )
     return session.scalars(stmt).first()
+
+
+def ensure_llm_pricing(session: Session, provider: str, model: str) -> None:
+    """今有効な LLM の単価があることを確かめる（第2回仕様 10章 SC候補-12）。なければ 422。
+
+    AI社員の作成・provider か model が変わる更新・割り当ての作成で使う。起動時の確認（409）は別。
+    """
+    if find_pricing(session, PricingKind.LLM, provider, model, utcnow()) is None:
+        raise DomainValidationError(f"no pricing for LLM {provider}/{model}")
 
 
 @dataclass(frozen=True)
@@ -506,9 +536,9 @@ class ExecutionMeter:
         pricing = find_pricing(self.session, PricingKind.LLM, provider, request.model, utcnow())
         if pricing is None or pricing.output_per_million_tokens <= 0:
             return None
-        chars = len(request.system) + sum(len(m.content) for m in request.messages)
+        tokens = estimated_input_tokens(request)
         input_cost = (
-            Decimal(chars) * pricing.input_per_million_tokens / TOKENS_PER_UNIT + pricing.per_call
+            Decimal(tokens) * pricing.input_per_million_tokens / TOKENS_PER_UNIT + pricing.per_call
         )
         remaining = self.cost_limit - self.execution.cost_amount - input_cost
         return int(remaining * TOKENS_PER_UNIT / pricing.output_per_million_tokens)
@@ -520,6 +550,7 @@ class ExecutionMeter:
         response: LLMResponse | None,
         error: BaseException | None,
         latency_ms: int,
+        request_params: dict[str, Any] | None = None,
     ) -> None:
         model = (response.model if response else None) or request.model
         pricing = find_pricing(self.session, PricingKind.LLM, provider, model, utcnow())
@@ -552,6 +583,7 @@ class ExecutionMeter:
             error_type=_call_error_type(error),
             error_message=str(error)[:MAX_ERROR_MESSAGE] if error else None,
             provider_request_id=response.request_id if response else None,
+            request_params=request_params,
             classification=self.classification.value,
             payload_mode=self.payload_mode.value,
         )
@@ -669,6 +701,10 @@ class _MeteredLLMClient:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         request = self._meter.before_llm_call(request, self.provider)
+        # 実際に送る設定（上限で絞った後の max_tokens を含む）。失敗した呼び出しでも記録する（11章）
+        params = (
+            self._inner.sent_params(request) if isinstance(self._inner, ReportsSentParams) else None
+        )
         started = time.monotonic()
         try:
             response = self._inner.complete(request)
@@ -676,10 +712,10 @@ class _MeteredLLMClient:
             elapsed = int((time.monotonic() - started) * 1000)
             # 応答が返っていれば（断られた・途中で切れた）その使用量で費用を記録する（E-07）
             returned = exc.response if isinstance(exc, LLMResponseError) else None
-            self._meter.record_llm_call(self.provider, request, returned, exc, elapsed)
+            self._meter.record_llm_call(self.provider, request, returned, exc, elapsed, params)
             raise
         elapsed = int((time.monotonic() - started) * 1000)
-        self._meter.record_llm_call(self.provider, request, response, None, elapsed)
+        self._meter.record_llm_call(self.provider, request, response, None, elapsed, params)
         self._meter._check_cost_after_call()
         return response
 

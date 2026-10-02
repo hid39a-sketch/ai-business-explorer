@@ -1,5 +1,6 @@
 """Claude API クライアントの変換と安全装置（実際の API には接続しない）。"""
 
+import json
 from pathlib import Path
 
 import anthropic
@@ -22,9 +23,9 @@ from tests.fake_claude import FAKE_KEY, FakeClaudeSDK, FakeReply
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _request(**kwargs: object) -> LLMRequest:
+def _request(model: str = "claude-opus-5-5", **kwargs: object) -> LLMRequest:
     return LLMRequest(
-        model="claude-opus-5-5",
+        model=model,
         system="指示",
         messages=[LLMMessage(role="user", content='{"data": "外部の文章"}')],
         prompt_key="p",
@@ -41,7 +42,7 @@ def test_request_and_response_conversion() -> None:
     sdk = FakeClaudeSDK(replies=[FakeReply(input_tokens=120, output_tokens=30)])
     response = _client(sdk).complete(_request(temperature=0.5, timeout_seconds=120))
     [params] = sdk.requests
-    # 指示（system）とデータ（user）を分け、Opus 5.5 が受け付けない sampling は送らない
+    # 指示（system）とデータ（user）を分け、Opus 5.5 には temperature を送らない（11章）
     assert params == {
         "model": "claude-opus-5-5",
         "max_tokens": 16000,
@@ -55,6 +56,62 @@ def test_request_and_response_conversion() -> None:
     assert (response.usage.input_tokens, response.usage.output_tokens) == (120, 30)
     assert response.request_id == "req_fake_123"
     assert sdk.api_keys == [FAKE_KEY]
+
+
+@pytest.mark.parametrize(
+    ("model", "temperature"),
+    [
+        ("claude-haiku-4-5", 0),
+        ("claude-haiku-4-5-20251001", 0),
+        ("claude-opus-5-5", None),
+        ("claude-sonnet-5-5", None),
+    ],
+)
+@pytest.mark.parametrize("requested", [None, 0.7])
+def test_temperature_is_sent_only_to_haiku_4_5(
+    model: str, temperature: int | None, requested: float | None
+) -> None:
+    """送るモデル ID で決める。Haiku 4.5 だけ 0 で、他には送らない。
+
+    LLMRequest.temperature の値は使わない。
+    """
+    sdk = FakeClaudeSDK(replies=[FakeReply()])
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    _client(sdk).complete(_request(model=model, temperature=requested, response_schema=schema))
+    [params] = sdk.requests
+    expected = {
+        "model": model,
+        "max_tokens": 16000,
+        "system": "指示",
+        "messages": [{"role": "user", "content": '{"data": "外部の文章"}'}],
+        "output_config": {
+            "format": {"type": "json_schema", "schema": anthropic.transform_schema(schema)}
+        },
+    }
+    if temperature is not None:
+        # SDK に temperature の引数がないので、extra_body で API の本文に入れる
+        expected["extra_body"] = {"temperature": temperature}
+    assert params == expected
+    for name in ("temperature", "top_p", "top_k"):
+        assert name not in params
+
+
+@pytest.mark.parametrize("model", ["claude-haiku-4", "claude-haiku-4-5-latest", "claude-3-5-haiku"])
+def test_other_haiku_like_ids_get_no_temperature(model: str) -> None:
+    """完全一致だけで判定する（似た ID には送らない）。"""
+    sdk = FakeClaudeSDK(replies=[FakeReply()])
+    _client(sdk).complete(_request(model=model))
+    [params] = sdk.requests
+    assert "temperature" not in params
+    assert "extra_body" not in params
+
+
+def test_fake_sdk_rejects_arguments_the_real_sdk_does_not_accept() -> None:
+    """Fake は実際の SDK の引数で検査する（temperature を直接渡すと TypeError）。"""
+    sdk = FakeClaudeSDK()
+    with pytest.raises(TypeError):
+        sdk.messages.create(model="m", max_tokens=1, messages=[], temperature=0)
+    sdk.messages.create(model="m", max_tokens=1, messages=[], extra_body={"temperature": 0})
 
 
 def test_max_tokens_never_exceeds_the_non_streaming_ceiling() -> None:
@@ -253,3 +310,89 @@ def test_unusable_structured_responses_still_fail_with_usage(stop_reason: str) -
         _client(sdk).complete(_request(response_schema=_schema()))
     assert info.value.response.structured is None
     assert info.value.response.usage.output_tokens == 50
+
+
+@pytest.mark.parametrize(
+    ("model", "sent"),
+    [("claude-haiku-4-5", True), ("claude-opus-5-5", False), ("claude-sonnet-5-5", False)],
+)
+def test_http_body_carries_temperature_only_for_haiku_4_5(model: str, sent: bool) -> None:
+    """実際の SDK で HTTP の本文を作り、temperature=0 が API に届く形か確かめる（接続はしない）。"""
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        body = {
+            "id": "msg_local",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": '{"ok": true}'}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        return httpx2.Response(200, json=body)
+
+    def factory(api_key: str) -> anthropic.Anthropic:
+        transport = httpx2.MockTransport(handler)
+        return anthropic.Anthropic(
+            api_key=api_key, max_retries=0, http_client=httpx2.Client(transport=transport)
+        )
+
+    client = ClaudeLLMClient(SecretStr(FAKE_KEY), client_factory=factory)
+    client.complete(_request(model=model))
+    [body] = bodies
+    assert ("temperature" in body) is sent
+    if sent:
+        assert body["temperature"] == 0
+    assert "top_p" not in body
+    assert "top_k" not in body
+
+
+@pytest.mark.parametrize(
+    ("model", "temperature"),
+    [
+        ("claude-haiku-4-5", {"sent": True, "value": 0}),
+        ("claude-haiku-4-5-20251001", {"sent": True, "value": 0}),
+        ("claude-opus-5-5", {"sent": False}),
+        ("claude-sonnet-5-5", {"sent": False}),
+    ],
+)
+def test_sent_params_match_what_is_sent(model: str, temperature: dict[str, object]) -> None:
+    """記録する設定は、実際に messages.create に渡す引数から作る（11章 SC候補-9）。"""
+    sdk = FakeClaudeSDK(replies=[FakeReply()])
+    client = _client(sdk)
+    request = _request(model=model, max_tokens=50_000)
+    params = client.sent_params(request)
+    client.complete(request)
+    [sent] = sdk.requests
+    assert params == {
+        "temperature": temperature,
+        "thinking": {"sent": False},
+        "effort": {"sent": False},
+        # 非ストリーミングの上限で絞った後の値
+        "max_tokens": {"sent": True, "value": sent["max_tokens"]},
+    }
+    assert sent["max_tokens"] == 16000
+    assert FAKE_KEY not in json.dumps(params)
+
+
+def test_describe_sent_params_reports_thinking_and_effort_when_sent() -> None:
+    from ai_business_explorer.llm.claude import describe_sent_params
+
+    params = describe_sent_params(
+        {
+            "model": "m",
+            "max_tokens": 10,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "low"},
+            "extra_body": {"temperature": 0},
+        }
+    )
+    assert params == {
+        "temperature": {"sent": True, "value": 0},
+        "thinking": {"sent": True, "value": {"type": "adaptive"}},
+        "effort": {"sent": True, "value": "low"},
+        "max_tokens": {"sent": True, "value": 10},
+    }

@@ -61,7 +61,9 @@ SEED_EMPLOYEES = [
         "stage_key": IDEA_GENERATION,
         "implementation_key": "idea_generator",
         "prompt_key": "idea_generator",
-        "prompt_version": "v1",
+        # v2：出力契約 v2（第2回仕様 17章）。v1 は変更しない。
+        # seed は AI社員がないときだけ作るので、既存の DB の AI社員は書き換えない
+        "prompt_version": "v2",
     },
     {
         "key": "market_researcher",
@@ -74,9 +76,10 @@ SEED_EMPLOYEES = [
         "stage_key": "market_research",
         "implementation_key": "market_researcher",
         "prompt_key": "market_researcher",
-        # v2：relation の意味（主張の内容と Evidence の関係）を明記した版。v1 は変更しない。
+        # v4：v3（relation の意味・レビュー情報の扱い）に出力契約 v2（17章）を加えた版。
+        # v1〜v3 は変更しない（出力契約 v1 のまま）。
         # seed は AI社員がないときだけ作るので、既存の DB の AI社員は書き換えない
-        "prompt_version": "v2",
+        "prompt_version": "v4",
     },
 ]
 
@@ -131,8 +134,12 @@ def seed(session: Session) -> None:
 # LLM の単価（USD / 100万トークン）。単価が変わったら新しい行（適用開始日時）を足す
 SEED_LLM_PRICING = [
     (FAKE_PROVIDER, FAKE_MODEL, Decimal(0), Decimal(0)),
-    # Anthropic の公開価格（2026-09 時点）。thinking のトークンは出力として課金される
-    (CLAUDE_PROVIDER, CLAUDE_DEFAULT_MODEL, Decimal(4), Decimal(20)),
+    # Anthropic の公開価格（2026-09 時点）。thinking のトークンは出力として課金される。
+    # 公式にある別名と日付付き ID を登録し、架空の ID は作らない（第2回仕様 10章 SC候補-12）
+    (CLAUDE_PROVIDER, CLAUDE_DEFAULT_MODEL, Decimal(4), Decimal(20)),  # claude-opus-5-5
+    (CLAUDE_PROVIDER, "claude-sonnet-5-5", Decimal(2), Decimal(10)),
+    (CLAUDE_PROVIDER, "claude-haiku-4-5", Decimal(1), Decimal(5)),
+    (CLAUDE_PROVIDER, "claude-haiku-4-5-20251001", Decimal(1), Decimal(5)),
 ]
 
 
@@ -170,7 +177,9 @@ def _create_employee(session: Session, registry: AgentRegistry, spec: dict[str, 
         llm_config={"provider": FAKE_PROVIDER, "model": FAKE_MODEL},
         allowed_tools=[],
         input_format=agent.input_model.model_json_schema(),
-        output_format=agent.output_model.model_json_schema(),
+        output_format=agent.contract_for(
+            spec["prompt_key"], spec["prompt_version"]
+        ).output_model.model_json_schema(),
         status=AIEmployeeStatus.ACTIVE.value,
         version=1,
     )
